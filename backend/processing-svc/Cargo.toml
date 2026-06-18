@@ -1,0 +1,28 @@
+[package]
+name = "processing-svc"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono = { workspace = true, features = ["serde"] }
+hex = { workspace = true }
+httpdate = { workspace = true }
+image = { workspace = true, features = ["png"] }
+indicatif = { workspace = true }
+quick-xml = { workspace = true, features = ["serialize"] }
+reqwest = { workspace = true, features = ["rustls-tls"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+shared = { workspace = true }
+sqlx = { workspace = true, features = ["runtime-tokio", "tls-rustls", "postgres", "chrono", "uuid", "json", "migrate", "macros"] }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "macros", "rt-multi-thread"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
+url = { workspace = true }
+uuid = { workspace = true, features = ["serde", "v4"] }

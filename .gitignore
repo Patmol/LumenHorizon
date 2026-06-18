@@ -1,0 +1,27 @@
+# macOS
+.DS_Store
+
+# Swift / Xcode
+.build/
+.swiftpm/
+DerivedData/
+Packages/
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+*.playground/
+
+# Rust
+backend/target/
+**/*.rs.bk
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo

@@ -1,0 +1,32 @@
+# Git and editor state
+.git
+.gitignore
+.vscode
+.idea
+.DS_Store
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Rust build outputs
+backend/target
+target
+
+# Local dependency/data volumes
+postgres-data
+azurite-data
+.tmp
+tmp
+
+# Logs and debug artifacts
+*.log
+*.pid
+backend/flycheck*
+backend/**/*.rs.bk
+
+# Docker/build noise
+Dockerfile
+.dockerignore
+compose.override.yml

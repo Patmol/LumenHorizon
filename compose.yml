@@ -1,0 +1,31 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: lumenhorizon-postgres
+    environment:
+      POSTGRES_USER: lumenhorizon
+      POSTGRES_PASSWORD: lumenhorizon
+      POSTGRES_DB: lumenhorizon
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lumenhorizon -d lumenhorizon"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:3.32.0
+    container_name: lumenhorizon-azurite
+    command: "azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --skipApiVersionCheck"
+    ports:
+      - "10000:10000"
+      - "10001:10001"
+    volumes:
+      - azurite-data:/data
+
+volumes:
+  postgres-data:
+  azurite-data:

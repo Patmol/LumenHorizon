@@ -1,0 +1,677 @@
+openapi: 3.1.0
+info:
+  title: LumenHorizon Public API
+  version: 0.1.0
+  description: API Gateway contract. Public read routes are anonymous; admin routes require JWT bearer auth.
+servers:
+  - url: https://api.lumenhorizon.com
+    description: Public API endpoint
+  - url: http://localhost:8080
+    description: Local API Gateway development
+security: []
+tags:
+  - name: Tiles
+  - name: Sites
+  - name: Admin
+paths:
+  /api/v1/tiles/manifest:
+    get:
+      tags: [Tiles]
+      summary: Get latest tile manifest
+      operationId: getLatestTileManifest
+      security: []
+      responses:
+        '200':
+          $ref: '#/components/responses/TileManifest'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /api/v1/tiles/manifest/{tile_set_id}:
+    get:
+      tags: [Tiles]
+      summary: Get immutable tile manifest
+      operationId: getTileManifestById
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/TileSetId'
+      responses:
+        '200':
+          $ref: '#/components/responses/TileManifest'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /api/v1/tiles/sets:
+    get:
+      tags: [Tiles]
+      summary: List tile sets
+      operationId: listTileSets
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          $ref: '#/components/responses/ObjectList'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /api/v1/tiles/classes:
+    get:
+      tags: [Tiles]
+      summary: Get dark-sky class legend
+      operationId: getTileClasses
+      security: []
+      responses:
+        '200':
+          $ref: '#/components/responses/ObjectResponse'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /api/v1/tiles/{tile_set_id}/{z}/{x}/{y}.png:
+    get:
+      tags: [Tiles]
+      summary: Development tile proxy or CDN redirect
+      operationId: getTileProxyOrRedirect
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/TileSetId'
+        - name: z
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 22
+        - name: x
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 0
+        - name: y
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 0
+      responses:
+        '302':
+          description: Redirect to CDN tile URL
+          headers:
+            Location:
+              schema:
+                type: string
+                format: uri
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '404':
+          $ref: '#/components/responses/TileNotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/TileUnavailable'
+  /api/v1/sites:
+    get:
+      tags: [Sites]
+      summary: Search public observing sites
+      operationId: searchSites
+      security: []
+      parameters:
+        - name: lat
+          in: query
+          schema:
+            type: number
+            minimum: -90
+            maximum: 90
+        - name: lon
+          in: query
+          schema:
+            type: number
+            minimum: -180
+            maximum: 180
+        - name: radius_km
+          in: query
+          schema:
+            type: number
+            minimum: 1
+            maximum: 250
+            default: 50
+        - name: west
+          in: query
+          schema:
+            type: number
+            minimum: -180
+            maximum: 180
+        - name: south
+          in: query
+          schema:
+            type: number
+            minimum: -90
+            maximum: 90
+        - name: east
+          in: query
+          schema:
+            type: number
+            minimum: -180
+            maximum: 180
+        - name: north
+          in: query
+          schema:
+            type: number
+            minimum: -90
+            maximum: 90
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          $ref: '#/components/responses/SiteList'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /api/v1/sites/{site_id}:
+    get:
+      tags: [Sites]
+      summary: Get public observing site detail
+      operationId: getSite
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/SiteId'
+      responses:
+        '200':
+          $ref: '#/components/responses/SiteResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /api/v1/sites/{site_id}/score:
+    get:
+      tags: [Sites]
+      summary: Get public sky-quality score
+      operationId: getSiteScore
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/SiteId'
+      responses:
+        '200':
+          $ref: '#/components/responses/SiteScore'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /api/v1/admin/ingest/trigger:
+    post:
+      tags: [Admin]
+      summary: Trigger ingest through an authorized admin operation
+      operationId: triggerIngest
+      security:
+        - AdminJwt: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        '202':
+          $ref: '#/components/responses/AdminActionAccepted'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/UpstreamError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /api/v1/admin/ingest/runs:
+    get:
+      tags: [Admin]
+      summary: List recent ingest runs
+      operationId: listAdminIngestRuns
+      security:
+        - AdminJwt: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          $ref: '#/components/responses/ObjectList'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /api/v1/admin/processing/runs:
+    get:
+      tags: [Admin]
+      summary: List recent processing runs
+      operationId: listAdminProcessingRuns
+      security:
+        - AdminJwt: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          $ref: '#/components/responses/ObjectList'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /api/v1/admin/processing/requeue:
+    post:
+      tags: [Admin]
+      summary: Requeue a failed or rejected processing item
+      operationId: requeueProcessingItem
+      security:
+        - AdminJwt: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ingest_id]
+              additionalProperties: false
+              properties:
+                ingest_id:
+                  type: string
+                  format: uuid
+      responses:
+        '202':
+          $ref: '#/components/responses/AdminActionAccepted'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/UpstreamError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /api/v1/admin/health/deep:
+    get:
+      tags: [Admin]
+      summary: Run authorized deep dependency health checks
+      operationId: getAdminDeepHealth
+      security:
+        - AdminJwt: []
+      responses:
+        '200':
+          $ref: '#/components/responses/ObjectResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+components:
+  securitySchemes:
+    AdminJwt:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: RS256 JWT validated against configured issuer, audience, JWKS URL, required subject, expiry, and admin role claim.
+  parameters:
+    TileSetId:
+      name: tile_set_id
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 160
+        pattern: '^[A-Za-z0-9._-]+$'
+    SiteId:
+      name: site_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 50
+    Cursor:
+      name: cursor
+      in: query
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 2048
+  responses:
+    TileManifest:
+      description: Tile manifest envelope
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/SuccessEnvelope'
+              - type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/TileManifest'
+    SiteList:
+      description: Site list envelope
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/SuccessEnvelope'
+              - type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Site'
+    SiteResponse:
+      description: Site detail envelope
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/SuccessEnvelope'
+              - type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Site'
+    SiteScore:
+      description: Site score envelope
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/SuccessEnvelope'
+              - type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/SiteScore'
+    ObjectResponse:
+      description: Object envelope
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/SuccessEnvelope'
+    ObjectList:
+      description: List envelope
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/SuccessEnvelope'
+    AdminActionAccepted:
+      description: Admin action accepted
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/SuccessEnvelope'
+    InvalidRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Unauthenticated:
+      description: Missing, invalid, or expired token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Forbidden:
+      description: Authenticated subject lacks permission
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    NotFound:
+      description: Resource does not exist or is not visible
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    TileNotFound:
+      description: Valid tile coordinate has no generated tile
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Conflict:
+      description: Request conflicts with resource state
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    UnprocessableEntity:
+      description: Valid JSON shape but semantically invalid domain input
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    RateLimited:
+      description: Rate limit exceeded
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    InternalError:
+      description: Unexpected server failure
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    UpstreamError:
+      description: Internal dependency failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ServiceUnavailable:
+      description: Required dependency unavailable or service not ready
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    TileUnavailable:
+      description: Tile set exists but requested output is unavailable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+  schemas:
+    SuccessEnvelope:
+      type: object
+      required: [data, meta, error]
+      additionalProperties: false
+      properties:
+        data: true
+        meta:
+          $ref: '#/components/schemas/EnvelopeMeta'
+        error:
+          type: 'null'
+    ErrorEnvelope:
+      type: object
+      required: [data, meta, error]
+      additionalProperties: false
+      properties:
+        data:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/EnvelopeMeta'
+        error:
+          $ref: '#/components/schemas/ErrorBody'
+    EnvelopeMeta:
+      type: object
+      required: [request_id, timestamp]
+      additionalProperties: false
+      properties:
+        request_id:
+          type: string
+          format: uuid
+        timestamp:
+          type: string
+          format: date-time
+        next_cursor:
+          type: string
+          nullable: true
+    ErrorBody:
+      type: object
+      required: [code, message]
+      additionalProperties: false
+      properties:
+        code:
+          type: string
+          enum:
+            - invalid_request
+            - unauthenticated
+            - forbidden
+            - not_found
+            - tile_not_found
+            - conflict
+            - unprocessable_entity
+            - rate_limited
+            - internal_error
+            - upstream_error
+            - service_unavailable
+            - tile_unavailable
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+          nullable: true
+    TileManifest:
+      type: object
+      required: [tile_set_id, dataset_date, generated_at, classification_version, render_version, format, tile_size, min_zoom, max_native_zoom, max_display_zoom, bounds, tile_url_template]
+      additionalProperties: true
+      properties:
+        tile_set_id:
+          type: string
+        dataset_date:
+          type: string
+          format: date
+        generated_at:
+          type: string
+          format: date-time
+        classification_version:
+          type: string
+        render_version:
+          type: string
+        format:
+          type: string
+          enum: [png]
+        tile_size:
+          type: integer
+          enum: [256]
+        min_zoom:
+          type: integer
+        max_native_zoom:
+          type: integer
+        max_display_zoom:
+          type: integer
+        bounds:
+          $ref: '#/components/schemas/Bounds'
+        tile_url_template:
+          type: string
+    Bounds:
+      type: object
+      required: [west, south, east, north]
+      additionalProperties: false
+      properties:
+        west:
+          type: number
+          minimum: -180
+          maximum: 180
+        south:
+          type: number
+          minimum: -90
+          maximum: 90
+        east:
+          type: number
+          minimum: -180
+          maximum: 180
+        north:
+          type: number
+          minimum: -90
+          maximum: 90
+    Site:
+      type: object
+      required: [site_id, name, latitude, longitude]
+      additionalProperties: true
+      properties:
+        site_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        latitude:
+          type: number
+          minimum: -90
+          maximum: 90
+        longitude:
+          type: number
+          minimum: -180
+          maximum: 180
+    SiteScore:
+      type: object
+      required: [site_id, score]
+      additionalProperties: true
+      properties:
+        site_id:
+          type: string
+          format: uuid
+        score:
+          type: integer
+          minimum: 0
+          maximum: 100
+        dark_sky_class:
+          type: string
+          nullable: true
+        weather_cloud_fraction:
+          type: number
+          nullable: true
