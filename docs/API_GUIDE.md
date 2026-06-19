@@ -33,6 +33,18 @@ Gateway `/api/v1` responses use a stable envelope:
 ```
 
 Errors keep `data` null and return a sanitized `error` object with a stable code and message.
+List responses put an opaque `next_cursor` in `meta` when another page is available:
+
+```json
+{
+  "data": [],
+  "meta": {
+    "request_id": "...",
+    "next_cursor": "opaque-cursor"
+  },
+  "error": null
+}
+```
 
 ## Ingest Service Development Routes
 
@@ -117,6 +129,58 @@ curl --fail "$LUMENHORIZON_API_URL/api/v1/tiles/classes"
 ```
 
 Returns available classification metadata, including the current `radiance-dark-sky-v1` product claim language.
+
+## Client Workflow Example
+
+The following examples use anonymous product routes only. Set `LUMENHORIZON_API_URL` to the local gateway URL before running them:
+
+```bash
+export LUMENHORIZON_API_URL="http://localhost:${API_GATEWAY_PORT:-8080}"
+```
+
+Fetch the latest manifest and read the immutable tile-set id plus tile URL template:
+
+```bash
+manifest_json="$(curl --fail "$LUMENHORIZON_API_URL/api/v1/tiles/manifest")"
+tile_set_id="$(jq -r '.data.tile_set_id' <<<"$manifest_json")"
+tile_url_template="$(jq -r '.data.tile_url_template' <<<"$manifest_json")"
+```
+
+The manifest `data` object includes:
+
+| Field | Client use |
+| --- | --- |
+| `tile_set_id` | Immutable tile-set id used in manifest and redirect paths. |
+| `min_zoom`, `max_native_zoom`, `max_display_zoom` | Zoom range clients should request. |
+| `bounds` | Geographic extent for tile availability checks. |
+| `tile_url_template` | Storage/CDN URL template with `{z}`, `{x}`, and `{y}` placeholders. |
+| `tile_count` | Number of generated native tiles in the manifest. |
+| `checksums.manifest_sha256` | Manifest integrity evidence. |
+
+Walk tile sets by following `meta.next_cursor` until it is absent:
+
+```bash
+cursor=""
+while :; do
+  url="$LUMENHORIZON_API_URL/api/v1/tiles/sets?limit=5"
+  if [[ -n "$cursor" ]]; then
+    url="$url&cursor=$cursor"
+  fi
+
+  page_json="$(curl --fail "$url")"
+  jq '.data[] | {tile_set_id, dataset_date, latest}' <<<"$page_json"
+  cursor="$(jq -r '.meta.next_cursor // empty' <<<"$page_json")"
+  [[ -n "$cursor" ]] || break
+done
+```
+
+Request tiles through the gateway using the immutable tile-set id. A valid tile returns `302` with a `Location` header built from `tile_url_template`:
+
+```bash
+curl -i "$LUMENHORIZON_API_URL/api/v1/tiles/$tile_set_id/3/1/2.png"
+```
+
+Common product-route errors are `400 invalid_request` for malformed parameters or impossible tile coordinates, `404 tile_not_found` for valid coordinates outside manifest bounds, `429 rate_limited`, and `503 service_unavailable` when a backing dependency or manifest is unavailable.
 
 ### Deferred Observing Site Routes
 

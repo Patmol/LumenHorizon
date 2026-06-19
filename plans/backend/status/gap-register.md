@@ -13,13 +13,7 @@ This register tracks active local/backend product gaps only.
 
 ## Active Gaps
 
-| ID | Severity | Area | Gap | Target |
-| --- | --- | --- | --- | --- |
-| GAP-001 | High | Science fixtures | Keep representative VIIRS fixture coverage current for dataset mapping, quality filtering, rejection, and classification behavior. | Chunk 7 |
-| GAP-002 | High | Tile validation | Add broader tile-generation smoke coverage for multiple products, bounds, and zoom ranges. | Chunk 8 |
-| GAP-003 | Medium | Retention evidence | Capture local dry-run and execute evidence for raw and tile retention cleanup against seeded data. | Chunk 8 |
-| GAP-004 | Medium | API clients | Add client-style smoke examples for manifest fetch, tile-set pagination, and tile redirect URL substitution. | Chunk 9 |
-| GAP-006 | Low | Documentation | Keep docs and `.env.example` synchronized as service config changes. | Ongoing |
+No active local/backend product gaps remain in this register.
 
 ## Closed Local Gaps
 
@@ -31,3 +25,8 @@ This register tracks active local/backend product gaps only.
 | CLOSED-004 | API contract | `just openapi-check` validates implemented gateway routes against OpenAPI. |
 | CLOSED-005 | Local CI | `just validate` and CI cover Rust checks, tests, Docker builds, image scans, and API contract validation without remote credentials. |
 | CLOSED-006 | Operations runbooks | Local PostgreSQL restore practice, queue backlog investigation, and retention cleanup runbooks live under `plans/backend/runbooks` with concrete diagnostic commands and expected outputs. |
+| CLOSED-007 | Science fixtures | Representative daily/monthly VIIRS fixture tests cover dataset mapping, quality filtering, cloud rejection, observation-count evidence, and dark-sky classification behavior. |
+| CLOSED-008 | Tile validation | Processing tests cover multi-product tile-generation smoke matrices across products, bounds, zoom ranges, manifest counts, and latest pointer consistency. |
+| CLOSED-009 | Retention evidence | `just retention-cleanup` and `just retention-cleanup-execute` were verified against seeded local data during gap closure; tests cover cleanup selection and safety rules. |
+| CLOSED-010 | API client examples | API docs and gateway tests cover latest manifest fetch, tile-set pagination, and tile redirect URL substitution. |
+| CLOSED-011 | Documentation sync | `.env.example`, developer docs, API docs, configuration reference, and verification docs are synchronized with current service config and smoke command surfaces. |

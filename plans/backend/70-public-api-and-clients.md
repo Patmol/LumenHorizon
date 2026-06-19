@@ -56,4 +56,5 @@ The gateway reserves these anonymous route contracts for the future observing-si
 
 - `just openapi-check` validates implemented `/api/v1` route inventory and auth posture.
 - Gateway tests cover request hardening, route envelopes, auth errors, rate-limit responses, tile redirects, and admin route policies.
+- API guide examples cover latest manifest fetch, tile-set pagination via `meta.next_cursor`, and tile redirect URL substitution against a local gateway.
 - API docs must be updated with route or envelope changes.

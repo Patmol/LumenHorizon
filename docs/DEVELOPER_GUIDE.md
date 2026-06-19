@@ -64,6 +64,37 @@ Important local variables from [.env.example](../.env.example):
 | `AZURE_STORAGE_ACCESS_KEY` | Azurite dev key | Storage key for local blobs and queues. |
 | `AZURE_STORAGE_EMULATOR_HOST` | `127.0.0.1` | Azurite host. |
 | `AZURE_QUEUE_NAME` | `viirs-processing` | Processing queue name. |
+| `PROCESSED_TILES_CONTAINER` | `processed-tiles` | Processed tile artifact and manifest container. |
+| `RATE_LIMIT_BACKEND` | `memory` | Local in-memory rate-limit backend; use `redis` with `REDIS_URL` for distributed profiles. |
+| `MAX_URL_LENGTH_BYTES` | `8192` | Gateway URL length limit. |
+| `ADMIN_MAX_BODY_BYTES` | `65536` | Gateway admin write body limit. |
+| `PUBLIC_ROUTE_TIMEOUT_SECONDS` | `5` | Public route timeout. |
+| `ADMIN_ROUTE_TIMEOUT_SECONDS` | `15` | Admin route timeout. |
+| `HEALTH_ROUTE_TIMEOUT_SECONDS` | `2` | Health/readiness timeout. |
+
+## Local Smoke Evidence
+
+Run retention cleanup evidence after local dependencies and migrations are ready:
+
+```bash
+just up
+just migrate
+just retention-cleanup
+just retention-cleanup-execute
+```
+
+Dry-run output should show selected stale raw or tile-set targets without deletion actions. Execute output should record deleted or missing events and mark eligible non-latest tile sets with retention metadata while preserving the latest plus protected prior tile sets. Use local data from ingest/processing runs or throwaway seeded data when practicing this flow.
+
+Exercise anonymous API client behavior while the API Gateway is serving and a latest tile manifest is available:
+
+```bash
+just serve-api
+curl --fail "$LUMENHORIZON_API_URL/api/v1/tiles/manifest"
+curl --fail "$LUMENHORIZON_API_URL/api/v1/tiles/sets?limit=5"
+curl -i "$LUMENHORIZON_API_URL/api/v1/tiles/<tile-set-id>/<z>/<x>/<y>.png"
+```
+
+The API guide shows a fuller manifest, pagination, and tile redirect workflow.
 
 ## Storage Inspection
 

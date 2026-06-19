@@ -40,4 +40,4 @@ The active roadmap is continuous from Chunk 0 through Chunk 10 in [../00-impleme
 
 ## Remaining Work
 
-See [gap-register.md](gap-register.md). Remaining gaps are product/backend gaps: deeper fixtures, data validation, API/client smoke evidence, and documentation polish.
+See [gap-register.md](gap-register.md). No active local/backend product gaps remain in the register. Science fixtures, tile validation smoke coverage, retention dry-run/execute evidence, API client examples, and current docs/config synchronization are covered by automated tests, local commands, and documentation.

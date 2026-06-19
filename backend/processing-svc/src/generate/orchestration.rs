@@ -276,8 +276,10 @@ fn tile_render_jobs(
 #[cfg(test)]
 mod tests {
     use chrono::TimeZone;
+    use uuid::Uuid;
 
     use super::*;
+    use crate::manifest::SourceGranule;
     use crate::tiles::TileRange;
 
     fn test_config() -> AppConfig {
@@ -288,6 +290,20 @@ mod tests {
             "TILE_MIN_ZOOM" => Some("3".to_owned()),
             "TILE_MAX_NATIVE_ZOOM" => Some("4".to_owned()),
             "TILE_BOUNDS" => Some("-90,30,-80,40".to_owned()),
+            "TILE_SIZE" => Some("2".to_owned()),
+            _ => None,
+        })
+        .unwrap()
+    }
+
+    fn test_config_for(bounds: &str, min_zoom: u8, max_native_zoom: u8) -> AppConfig {
+        crate::config::AppConfig::from_lookup(|name| match name {
+            "DATABASE_URL" => Some("postgres://localhost/lumenhorizon".to_owned()),
+            "AZURE_STORAGE_ACCOUNT" => Some("devstoreaccount1".to_owned()),
+            "AZURE_STORAGE_ACCESS_KEY" => Some("test-key".to_owned()),
+            "TILE_MIN_ZOOM" => Some(min_zoom.to_string()),
+            "TILE_MAX_NATIVE_ZOOM" => Some(max_native_zoom.to_string()),
+            "TILE_BOUNDS" => Some(bounds.to_owned()),
             "TILE_SIZE" => Some("2".to_owned()),
             _ => None,
         })
@@ -387,6 +403,97 @@ mod tests {
         );
         assert_eq!(tile_set.manifest.tile_size, config.tile_size);
         assert_eq!(tile_set.manifest.checksums.manifest_sha256.len(), 64);
+    }
+
+    #[tokio::test]
+    async fn builds_generated_tile_sets_for_product_bounds_and_zoom_smoke_matrix() {
+        struct Case {
+            product: &'static str,
+            tile_set_id: &'static str,
+            bounds: &'static str,
+            min_zoom: u8,
+            max_native_zoom: u8,
+        }
+
+        let cases = [
+            Case {
+                product: "VNP46A2",
+                tile_set_id: "2026-05-21-radiance-dark-sky-v1-vnp46a2",
+                bounds: "-90,30,-80,40",
+                min_zoom: 3,
+                max_native_zoom: 3,
+            },
+            Case {
+                product: "VJ146A2",
+                tile_set_id: "2026-05-21-radiance-dark-sky-v1-vj146a2",
+                bounds: "-85,32,-84,33",
+                min_zoom: 6,
+                max_native_zoom: 7,
+            },
+            Case {
+                product: "VNP46A3",
+                tile_set_id: "2026-05-01-radiance-dark-sky-v1-vnp46a3",
+                bounds: "-125,24,-66,50",
+                min_zoom: 3,
+                max_native_zoom: 4,
+            },
+        ];
+
+        for case in cases {
+            let config = test_config_for(case.bounds, case.min_zoom, case.max_native_zoom);
+            let source_bounds = GeographicBounds::from(config.tile_bounds);
+            let raster_shape = RasterShape {
+                width: 1000,
+                height: 1000,
+            };
+
+            let tile_set = generate_tile_set_with_renderer(
+                &config,
+                TileSetBuildRequest {
+                    tile_set_id: case.tile_set_id.to_owned(),
+                    dataset_date: chrono::NaiveDate::from_ymd_opt(2026, 5, 21).unwrap(),
+                    generated_at: chrono::Utc.with_ymd_and_hms(2026, 5, 21, 9, 15, 0).unwrap(),
+                    processor_version: "processing-svc:test-sha".to_owned(),
+                    generation_bounds: source_bounds,
+                    source_bounds,
+                    raster_shape,
+                    source_granules: vec![SourceGranule {
+                        ingest_id: Uuid::parse_str("00000000-0000-0000-0000-00000000f001").unwrap(),
+                        product: case.product.to_owned(),
+                        blob_path: format!("{}/2026-05-21/h11v06.h5", case.product),
+                    }],
+                },
+                |coord, _window| async move {
+                    Ok(RenderedTile {
+                        coord,
+                        png_bytes: b"\x89PNG\r\n\x1a\nfixture".to_vec(),
+                    })
+                },
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(
+                tile_set.plan.ranges.len(),
+                usize::from(case.max_native_zoom - case.min_zoom + 1),
+                "{}",
+                case.product
+            );
+            assert_eq!(tile_set.tiles.len(), tile_set.plan.tile_count as usize);
+            assert_eq!(tile_set.manifest.tile_count, tile_set.plan.tile_count);
+            assert_eq!(tile_set.manifest.tile_set_id, case.tile_set_id);
+            assert_eq!(tile_set.manifest.min_zoom, case.min_zoom);
+            assert_eq!(tile_set.manifest.max_native_zoom, case.max_native_zoom);
+            assert_eq!(tile_set.manifest.source_granules[0].product, case.product);
+            assert!(tile_set
+                .tiles
+                .iter()
+                .all(|tile| tile.png_bytes.starts_with(b"\x89PNG\r\n\x1a\n")));
+            assert!(tile_set
+                .manifest
+                .tile_url_template
+                .contains(case.tile_set_id));
+        }
     }
 
     #[tokio::test]
