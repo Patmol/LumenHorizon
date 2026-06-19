@@ -17,10 +17,20 @@ The active API plan describes local API Gateway behavior and client contracts. P
 | Route | Purpose |
 | --- | --- |
 | `GET /api/v1/tiles/manifest` | Latest tile manifest. |
-| `GET /api/v1/tiles/manifest/{manifest_id}` | Specific tile manifest. |
-| `GET /api/v1/tile-sets` | Paginated tile-set metadata. |
-| `GET /api/v1/tile-classes` | Classification metadata. |
-| `GET /api/v1/tiles/{classification}/{z}/{x}/{y}.png` | Tile redirect. |
+| `GET /api/v1/tiles/manifest/{tile_set_id}` | Specific immutable tile manifest. |
+| `GET /api/v1/tiles/sets` | Paginated tile-set metadata. |
+| `GET /api/v1/tiles/classes` | Classification metadata. |
+| `GET /api/v1/tiles/{tile_set_id}/{z}/{x}/{y}.png` | Tile redirect. |
+
+## Deferred Public Site Routes
+
+The gateway reserves these anonymous route contracts for the future observing-site feature. They validate request shape, are represented in OpenAPI, and currently return sanitized `503 service_unavailable` responses until site data ownership, import workflows, and score semantics are promoted from [future/observing-sites-and-sky-quality.md](future/observing-sites-and-sky-quality.md).
+
+| Route | Current behavior |
+| --- | --- |
+| `GET /api/v1/sites` | Validates search parameters, then returns deferred unavailable. |
+| `GET /api/v1/sites/{site_id}` | Validates UUID site id, then returns deferred unavailable. |
+| `GET /api/v1/sites/{site_id}/score` | Validates UUID site id, then returns deferred unavailable. |
 
 ## Admin Routes
 
@@ -39,10 +49,12 @@ The active API plan describes local API Gateway behavior and client contracts. P
 - Cursors are opaque.
 - Clients consume manifests and should not infer storage paths.
 - Tile URL templates use `{z}`, `{x}`, and `{y}` placeholders.
+- Tile redirect paths use immutable `{tile_set_id}` values, not classification names.
 - Product copy must describe `radiance-dark-sky-v1` as VIIRS radiance-based evidence, not measured observing quality.
 
 ## Verification
 
 - `just openapi-check` validates implemented `/api/v1` route inventory and auth posture.
 - Gateway tests cover request hardening, route envelopes, auth errors, rate-limit responses, tile redirects, and admin route policies.
+- API guide examples cover latest manifest fetch, tile-set pagination via `meta.next_cursor`, and tile redirect URL substitution against a local gateway.
 - API docs must be updated with route or envelope changes.

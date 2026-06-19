@@ -99,6 +99,72 @@ mod tests {
     }
 
     #[test]
+    fn plans_representative_tile_smoke_matrix() {
+        let cases = [
+            (
+                "daily continental single zoom",
+                GeographicBounds {
+                    west: -125.0,
+                    south: 24.0,
+                    east: -66.0,
+                    north: 50.0,
+                },
+                3,
+                3,
+            ),
+            (
+                "daily clipped regional high zoom",
+                GeographicBounds {
+                    west: -85.0,
+                    south: 32.0,
+                    east: -84.0,
+                    north: 33.0,
+                },
+                6,
+                8,
+            ),
+            (
+                "monthly broad low zoom",
+                GeographicBounds {
+                    west: -140.0,
+                    south: 10.0,
+                    east: -60.0,
+                    north: 60.0,
+                },
+                2,
+                4,
+            ),
+        ];
+
+        for (name, bounds, min_zoom, max_native_zoom) in cases {
+            let plan = plan_tile_generation_for_bounds(bounds, min_zoom, max_native_zoom).unwrap();
+
+            assert_eq!(
+                plan.ranges.len(),
+                usize::from(max_native_zoom - min_zoom + 1),
+                "{name}"
+            );
+            assert_eq!(plan.ranges.first().unwrap().z, min_zoom, "{name}");
+            assert_eq!(plan.ranges.last().unwrap().z, max_native_zoom, "{name}");
+            assert!(plan.tile_count > 0, "{name}");
+            assert_eq!(
+                plan.tile_count,
+                plan.ranges
+                    .iter()
+                    .map(|range| tile_range_tile_count(*range) as u32)
+                    .sum::<u32>(),
+                "{name}"
+            );
+            assert!(
+                plan.ranges
+                    .iter()
+                    .all(|range| range.min_x <= range.max_x && range.min_y <= range.max_y),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
     fn plans_tile_generation_from_config_bounds() {
         let config = crate::config::AppConfig::from_lookup(|name| match name {
             "DATABASE_URL" => Some("postgres://localhost/lumenhorizon".to_owned()),

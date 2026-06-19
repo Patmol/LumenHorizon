@@ -137,11 +137,27 @@ pub(crate) fn exceeds_max_cloud_fraction(
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_pixel_sample, exceeds_max_cloud_fraction, summarize_quality,
+        classify_pixel_sample, exceeds_max_cloud_fraction, is_renderable_sample, summarize_quality,
         PixelSampleClassification, QualitySummary, QUALITY_RULE_VERSION,
     };
     use crate::science::{classification::PixelQuality, dataset_mapping_for_product};
-    use shared::processing_message::ProcessingProduct;
+    use shared::processing_message::{ProcessingProduct, ProductCadence};
+
+    #[derive(Debug, Clone, Copy)]
+    struct PixelFixture {
+        name: &'static str,
+        product: ProcessingProduct,
+        radiance: f32,
+        quality: f32,
+        cloud: Option<f32>,
+        observation_count: Option<f32>,
+        expected_cadence: ProductCadence,
+        expected_radiance_quality: PixelQuality,
+        expected_quality_mask_quality: PixelQuality,
+        expected_cloud_contaminated: Option<bool>,
+        expected_observation_count: Option<u16>,
+        expected_renderable: bool,
+    }
 
     #[test]
     fn classifies_daily_pixel_sample() {
@@ -168,6 +184,194 @@ mod tests {
         assert_eq!(classification.quality_sample, 2);
         assert_eq!(classification.cloud_contaminated, None);
         assert_eq!(classification.observation_count_sample, Some(12));
+    }
+
+    #[test]
+    fn representative_viirs_fixtures_cover_product_quality_and_renderability() {
+        let fixtures = [
+            PixelFixture {
+                name: "vnp46a2 clear daily pixel",
+                product: ProcessingProduct::Vnp46A2,
+                radiance: 0.2,
+                quality: 0.0,
+                cloud: Some((0b00 << 6) as f32),
+                observation_count: None,
+                expected_cadence: ProductCadence::Daily,
+                expected_radiance_quality: PixelQuality::Valid,
+                expected_quality_mask_quality: PixelQuality::Valid,
+                expected_cloud_contaminated: Some(false),
+                expected_observation_count: None,
+                expected_renderable: true,
+            },
+            PixelFixture {
+                name: "vj146a2 cloudy daily pixel",
+                product: ProcessingProduct::Vj146A2,
+                radiance: 1.0,
+                quality: 0.0,
+                cloud: Some((0b11 << 6) as f32),
+                observation_count: None,
+                expected_cadence: ProductCadence::Daily,
+                expected_radiance_quality: PixelQuality::Valid,
+                expected_quality_mask_quality: PixelQuality::Valid,
+                expected_cloud_contaminated: Some(true),
+                expected_observation_count: None,
+                expected_renderable: false,
+            },
+            PixelFixture {
+                name: "vnp46a2 radiance fill pixel",
+                product: ProcessingProduct::Vnp46A2,
+                radiance: -999.9,
+                quality: 0.0,
+                cloud: Some((0b00 << 6) as f32),
+                observation_count: None,
+                expected_cadence: ProductCadence::Daily,
+                expected_radiance_quality: PixelQuality::Invalid,
+                expected_quality_mask_quality: PixelQuality::Valid,
+                expected_cloud_contaminated: Some(false),
+                expected_observation_count: None,
+                expected_renderable: false,
+            },
+            PixelFixture {
+                name: "vnp46a3 monthly good quality composite pixel",
+                product: ProcessingProduct::Vnp46A3,
+                radiance: 3.0,
+                quality: 2.0,
+                cloud: None,
+                observation_count: Some(12.0),
+                expected_cadence: ProductCadence::Monthly,
+                expected_radiance_quality: PixelQuality::Valid,
+                expected_quality_mask_quality: PixelQuality::Valid,
+                expected_cloud_contaminated: None,
+                expected_observation_count: Some(12),
+                expected_renderable: true,
+            },
+            PixelFixture {
+                name: "vnp46a3 monthly rejected quality pixel",
+                product: ProcessingProduct::Vnp46A3,
+                radiance: 0.8,
+                quality: 1.0,
+                cloud: None,
+                observation_count: Some(0.0),
+                expected_cadence: ProductCadence::Monthly,
+                expected_radiance_quality: PixelQuality::Valid,
+                expected_quality_mask_quality: PixelQuality::Invalid,
+                expected_cloud_contaminated: None,
+                expected_observation_count: Some(0),
+                expected_renderable: false,
+            },
+            PixelFixture {
+                name: "vnp46a3 monthly negative radiance pixel",
+                product: ProcessingProduct::Vnp46A3,
+                radiance: -0.1,
+                quality: 0.0,
+                cloud: None,
+                observation_count: Some(3.0),
+                expected_cadence: ProductCadence::Monthly,
+                expected_radiance_quality: PixelQuality::Invalid,
+                expected_quality_mask_quality: PixelQuality::Valid,
+                expected_cloud_contaminated: None,
+                expected_observation_count: Some(3),
+                expected_renderable: false,
+            },
+        ];
+
+        for fixture in fixtures {
+            let mapping = dataset_mapping_for_product(fixture.product);
+            let classification = classify_pixel_sample(
+                mapping,
+                fixture.radiance,
+                fixture.quality,
+                fixture.cloud,
+                fixture.observation_count,
+            )
+            .unwrap();
+
+            assert_eq!(
+                mapping.cadence, fixture.expected_cadence,
+                "{}",
+                fixture.name
+            );
+            assert_eq!(
+                classification.radiance_quality, fixture.expected_radiance_quality,
+                "{}",
+                fixture.name
+            );
+            assert_eq!(
+                classification.quality_mask_quality, fixture.expected_quality_mask_quality,
+                "{}",
+                fixture.name
+            );
+            assert_eq!(
+                classification.cloud_contaminated, fixture.expected_cloud_contaminated,
+                "{}",
+                fixture.name
+            );
+            assert_eq!(
+                classification.observation_count_sample, fixture.expected_observation_count,
+                "{}",
+                fixture.name
+            );
+            assert_eq!(
+                is_renderable_sample(&classification),
+                fixture.expected_renderable,
+                "{}",
+                fixture.name
+            );
+        }
+    }
+
+    #[test]
+    fn daily_fixture_summary_supports_cloud_rejection_evidence() {
+        let mapping = dataset_mapping_for_product(ProcessingProduct::Vnp46A2);
+        let classifications = [
+            classify_pixel_sample(mapping, 0.2, 0.0, Some((0b10 << 6) as f32), None).unwrap(),
+            classify_pixel_sample(mapping, 0.4, 0.0, Some((0b11 << 6) as f32), None).unwrap(),
+            classify_pixel_sample(mapping, 0.8, 0.0, Some((0b10 << 6) as f32), None).unwrap(),
+            classify_pixel_sample(mapping, 1.0, 0.0, Some((0b00 << 6) as f32), None).unwrap(),
+        ];
+
+        let summary = summarize_quality(&classifications);
+
+        assert_eq!(summary.total_pixel_count, 4);
+        assert_eq!(summary.valid_pixel_count, 4);
+        assert_eq!(summary.rejected_pixel_count, 0);
+        assert_eq!(summary.cloud_contaminated_valid_pixel_count, 3);
+        assert_eq!(summary.cloud_fraction, 0.75);
+        assert!(exceeds_max_cloud_fraction(&summary, 0.4));
+        assert_eq!(
+            classifications
+                .iter()
+                .filter(|classification| is_renderable_sample(classification))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn monthly_fixture_summary_preserves_observation_counts_without_cloud_denominator() {
+        let mapping = dataset_mapping_for_product(ProcessingProduct::Vnp46A3);
+        let classifications = [
+            classify_pixel_sample(mapping, 0.2, 0.0, None, Some(1.0)).unwrap(),
+            classify_pixel_sample(mapping, 0.4, 2.0, None, Some(12.0)).unwrap(),
+            classify_pixel_sample(mapping, 0.8, 1.0, None, Some(0.0)).unwrap(),
+            classify_pixel_sample(mapping, -999.9, 0.0, None, Some(6.0)).unwrap(),
+        ];
+
+        let summary = summarize_quality(&classifications);
+
+        assert_eq!(
+            classifications
+                .iter()
+                .map(|classification| classification.observation_count_sample)
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(12), Some(0), Some(6)]
+        );
+        assert_eq!(summary.total_pixel_count, 4);
+        assert_eq!(summary.valid_pixel_count, 2);
+        assert_eq!(summary.rejected_pixel_count, 2);
+        assert_eq!(summary.cloud_contaminated_valid_pixel_count, 0);
+        assert_eq!(summary.cloud_fraction, 0.0);
+        assert!(!exceeds_max_cloud_fraction(&summary, 0.4));
     }
 
     #[test]

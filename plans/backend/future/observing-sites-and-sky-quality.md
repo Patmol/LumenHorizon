@@ -1,6 +1,6 @@
 # Observing Sites And Sky-Quality Scores
 
-Status: Future feature plan. Deferred so the active API work can focus on tile manifests and `MKTileOverlay` compatibility.
+Status: Future feature plan with reserved API placeholders. The gateway and OpenAPI already include deferred `/api/v1/sites` route shapes that validate requests and return sanitized `503 service_unavailable` responses until this feature is promoted.
 
 ## Product Intent
 
@@ -8,17 +8,17 @@ Help users find practical public observing locations and understand nearby sky q
 
 ## Proposed Scope
 
-- Implement public observing site lookup through `api-gateway`.
+- Promote public observing site lookup from deferred placeholder responses to backed `api-gateway` behavior.
 - Provide public site detail responses for approved, system-curated, or imported public datasets.
-- Implement sky-quality score responses for a site using the latest tile manifest, nearest dark-sky classification, data freshness, and explicitly modeled future signals such as weather or cloud cover.
+- Promote sky-quality score responses for a site using the latest tile manifest, nearest dark-sky classification, data freshness, and explicitly modeled future signals such as weather or cloud cover.
 - Define the data ownership boundary for `sites-svc` or an equivalent service/module before implementation.
 - Add database tables, migrations, indexing, and import/update workflows for approved site data.
-- Add OpenAPI contract coverage for route shapes, query parameters, response envelopes, error codes, auth posture, and rate-limit behavior.
+- Update OpenAPI contract coverage for backed response shapes, error codes, auth posture, and rate-limit behavior.
 - Integrate the Apple client with site lookup and score reads after backend contracts are stable.
 
-## Candidate Public Routes
+## Reserved Public Routes
 
-These are placeholders for discussion, not active implementation commitments.
+These route shapes are reserved in the active gateway and OpenAPI contract. They are not backed by site data yet; current handlers only validate request shape and return deferred unavailable responses.
 
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
@@ -57,10 +57,10 @@ Candidate search parameters:
 - Chunk 9 API Gateway foundation, including auth, rate limits, request IDs, sanitized errors, and OpenAPI validation.
 - Chunk 9 tile manifest endpoints and client tile overlay integration.
 - Tile generation and latest manifest publication from Chunk 8.
-- A decision on whether `sites-svc` is a separate service, an `api-gateway` module, or a later split after the data model stabilizes.
+- A decision on whether backed site data belongs in a separate `sites-svc`, an `api-gateway` module, or a later split after the data model stabilizes.
 - Approved source datasets and licensing/attribution requirements for public observing sites.
 
-## Out Of Scope Until Promoted
+## Out Of Scope Until Backed Responses Are Promoted
 
 - User accounts, private saved locations, reviews, comments, or community submissions.
 - Production browser CORS changes unless a browser client is explicitly added.
@@ -78,7 +78,7 @@ Candidate search parameters:
 ## Promotion Checklist
 
 - Product behavior and client screens are clear enough to test.
-- Public route contracts are reviewed and added to `backend/api-gateway/openapi/openapi.yaml`.
+- Public route contracts are reviewed and backed response shapes are added to `backend/api-gateway/openapi/openapi.yaml`.
 - Security and identity docs explicitly include the promoted site/score route classes.
 - Database schema and migration ownership are finalized.
 - Rate limits, cache headers, privacy rules, and logging fields are documented.

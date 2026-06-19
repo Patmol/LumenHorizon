@@ -48,4 +48,6 @@
 
 - Tests cover queue receive/delete/dead-letter behavior.
 - Tests cover dataset mapping, quality filtering, classification evidence, and rejection reasons.
-- Tests cover tile math, manifest shape, latest pointer publication, and cleanup selection.
+- Tests cover representative daily and monthly science fixtures, including cloud rejection and monthly observation-count evidence.
+- Tests cover tile math, multi-bounds/zoom smoke plans, manifest shape, latest pointer publication, and cleanup selection.
+- `just retention-cleanup` and `just retention-cleanup-execute` verify local dry-run and execute retention behavior against stale local metadata and blobs.

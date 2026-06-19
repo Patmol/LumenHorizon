@@ -225,4 +225,75 @@ mod tests {
         assert_eq!(tile_set.tiles.len(), 1);
         assert_eq!(tile_set.tiles[0].coord, TileCoord { z: 3, x: 2, y: 3 });
     }
+
+    #[test]
+    fn generated_tiles_and_latest_pointer_are_manifest_consistent() {
+        let config = crate::config::AppConfig::from_lookup(|name| match name {
+            "DATABASE_URL" => Some("postgres://localhost/lumenhorizon".to_owned()),
+            "AZURE_STORAGE_ACCOUNT" => Some("devstoreaccount1".to_owned()),
+            "AZURE_STORAGE_ACCESS_KEY" => Some("test-key".to_owned()),
+            "TILE_MIN_ZOOM" => Some("3".to_owned()),
+            "TILE_MAX_NATIVE_ZOOM" => Some("3".to_owned()),
+            "TILE_BOUNDS" => Some("-90,30,-80,40".to_owned()),
+            "TILE_SIZE" => Some("2".to_owned()),
+            _ => None,
+        })
+        .unwrap();
+
+        let manifest = TileManifest::from_config(
+            &config,
+            TileManifestInput {
+                tile_set_id: "2026-05-21-radiance-dark-sky-v1-a1b2c3d4".to_owned(),
+                dataset_date: chrono::NaiveDate::from_ymd_opt(2026, 5, 21).unwrap(),
+                generated_at: chrono::Utc::now(),
+                processor_version: "processing-svc:test-sha".to_owned(),
+                bounds: GeographicBounds {
+                    west: -90.0,
+                    south: 30.0,
+                    east: -80.0,
+                    north: 40.0,
+                },
+                tile_count: 2,
+                source_granules: Vec::new(),
+            },
+        )
+        .unwrap();
+        let tiles = [
+            RenderedTile {
+                coord: TileCoord { z: 3, x: 2, y: 3 },
+                png_bytes: b"fake-png-a".to_vec(),
+            },
+            RenderedTile {
+                coord: TileCoord { z: 3, x: 2, y: 4 },
+                png_bytes: b"fake-png-b".to_vec(),
+            },
+        ];
+
+        let tile_paths = tiles
+            .iter()
+            .map(|tile| tile_blob_path(&manifest.tile_set_id, tile.coord).unwrap())
+            .collect::<Vec<_>>();
+        let latest_pointer = manifest.latest_pointer(chrono::Utc::now()).unwrap();
+
+        assert_eq!(
+            tile_paths,
+            vec![
+                "tiles/2026-05-21-radiance-dark-sky-v1-a1b2c3d4/3/2/3.png",
+                "tiles/2026-05-21-radiance-dark-sky-v1-a1b2c3d4/3/2/4.png",
+            ]
+        );
+        assert_eq!(
+            manifest.manifest_blob_path().unwrap(),
+            "manifests/2026-05-21-radiance-dark-sky-v1-a1b2c3d4.json"
+        );
+        assert_eq!(
+            latest_pointer.manifest_blob_path,
+            manifest.manifest_blob_path().unwrap()
+        );
+        assert_eq!(
+            latest_pointer.manifest_sha256,
+            manifest.checksums.manifest_sha256
+        );
+        assert_eq!(manifest.tile_count as usize, tiles.len());
+    }
 }
