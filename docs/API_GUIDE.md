@@ -91,13 +91,13 @@ Returns the latest published tile manifest from the processed tiles container. I
 ### Tile Manifest By ID
 
 ```bash
-curl --fail "$LUMENHORIZON_API_URL/api/v1/tiles/manifest/<manifest-id>"
+curl --fail "$LUMENHORIZON_API_URL/api/v1/tiles/manifest/<tile-set-id>"
 ```
 
 ### Tile Sets
 
 ```bash
-curl --fail "$LUMENHORIZON_API_URL/api/v1/tile-sets?limit=20"
+curl --fail "$LUMENHORIZON_API_URL/api/v1/tiles/sets?limit=20"
 ```
 
 List responses include `next_cursor` in `meta` when another page exists. Cursors are opaque.
@@ -105,7 +105,7 @@ List responses include `next_cursor` in `meta` when another page exists. Cursors
 ### Tile Redirect
 
 ```bash
-curl -i "$LUMENHORIZON_API_URL/api/v1/tiles/<classification>/<z>/<x>/<y>.png"
+curl -i "$LUMENHORIZON_API_URL/api/v1/tiles/<tile-set-id>/<z>/<x>/<y>.png"
 ```
 
 Valid coordinates redirect to the tile object URL from the manifest. Invalid coordinates return `400 invalid_request`; valid-but-missing tiles return `404 tile_not_found`.
@@ -113,10 +113,20 @@ Valid coordinates redirect to the tile object URL from the manifest. Invalid coo
 ### Tile Classes
 
 ```bash
-curl --fail "$LUMENHORIZON_API_URL/api/v1/tile-classes"
+curl --fail "$LUMENHORIZON_API_URL/api/v1/tiles/classes"
 ```
 
 Returns available classification metadata, including the current `radiance-dark-sky-v1` product claim language.
+
+### Deferred Observing Site Routes
+
+The gateway reserves the future observing-site route shapes in OpenAPI. These routes validate request shape and currently return sanitized unavailable responses until site data and score semantics are promoted:
+
+```bash
+curl -i "$LUMENHORIZON_API_URL/api/v1/sites?lat=40&lon=-105&radius_km=50"
+curl -i "$LUMENHORIZON_API_URL/api/v1/sites/00000000-0000-0000-0000-000000000001"
+curl -i "$LUMENHORIZON_API_URL/api/v1/sites/00000000-0000-0000-0000-000000000001/score"
+```
 
 ## Admin Routes
 

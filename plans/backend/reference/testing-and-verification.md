@@ -24,7 +24,7 @@ cargo test --workspace
 just openapi-check
 ```
 
-The check verifies implemented `/api/v1` gateway routes against [../../backend/api-gateway/openapi/openapi.yaml](../../backend/api-gateway/openapi/openapi.yaml), including route inventory and auth posture.
+The check verifies implemented `/api/v1` gateway routes against [backend/api-gateway/openapi/openapi.yaml](../../../backend/api-gateway/openapi/openapi.yaml), including route inventory and auth posture.
 
 ## Script Checks
 

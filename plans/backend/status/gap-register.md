@@ -19,7 +19,6 @@ This register tracks active local/backend product gaps only.
 | GAP-002 | High | Tile validation | Add broader tile-generation smoke coverage for multiple products, bounds, and zoom ranges. | Chunk 8 |
 | GAP-003 | Medium | Retention evidence | Capture local dry-run and execute evidence for raw and tile retention cleanup against seeded data. | Chunk 8 |
 | GAP-004 | Medium | API clients | Add client-style smoke examples for manifest fetch, tile-set pagination, and tile redirect URL substitution. | Chunk 9 |
-| GAP-005 | Medium | Operations | Expand local runbooks with concrete diagnostic commands and expected outputs. | Chunk 10 |
 | GAP-006 | Low | Documentation | Keep docs and `.env.example` synchronized as service config changes. | Ongoing |
 
 ## Closed Local Gaps
@@ -31,3 +30,4 @@ This register tracks active local/backend product gaps only.
 | CLOSED-003 | Tile manifests | Processing publishes immutable manifests and a latest pointer. |
 | CLOSED-004 | API contract | `just openapi-check` validates implemented gateway routes against OpenAPI. |
 | CLOSED-005 | Local CI | `just validate` and CI cover Rust checks, tests, Docker builds, image scans, and API contract validation without remote credentials. |
+| CLOSED-006 | Operations runbooks | Local PostgreSQL restore practice, queue backlog investigation, and retention cleanup runbooks live under `plans/backend/runbooks` with concrete diagnostic commands and expected outputs. |

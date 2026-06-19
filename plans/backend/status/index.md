@@ -7,7 +7,7 @@ The repository is now a local/backend product codebase. The active implementatio
 ## Already Done
 
 - Product/backend architecture and planning docs are active under `plans/`.
-- Local PostgreSQL and Azurite are wired through [compose.yml](../../compose.yml) and `just` commands.
+- Local PostgreSQL and Azurite are wired through [compose.yml](../../../compose.yml) and `just` commands.
 - `ingest-svc` supports `serve`, `ingest`, `recover-ingest`, and `replay-rejected` workflows.
 - `db-migrate` applies SQLx migrations for backend schemas.
 - `processing-svc` supports queue processing, science processing, tile generation, manifests, and retention cleanup.
@@ -36,8 +36,8 @@ The active roadmap is continuous from Chunk 0 through Chunk 10 in [../00-impleme
 
 - Chunks 0-5: foundation, local dependencies, ingest, quality gates, and CI.
 - Chunks 6-8: processing, science products, tiles, and retention.
-- Chunks 9-10: API Gateway, client contracts, runbooks, and local launch-readiness cleanup.
+- Chunks 9-10: API Gateway, client contracts, runbooks, deferred site-route placeholders, and local launch-readiness cleanup.
 
 ## Remaining Work
 
-See [gap-register.md](gap-register.md). Remaining gaps are product/backend gaps: deeper fixtures, data validation, operational runbook depth, API/client smoke evidence, and documentation polish.
+See [gap-register.md](gap-register.md). Remaining gaps are product/backend gaps: deeper fixtures, data validation, API/client smoke evidence, and documentation polish.
