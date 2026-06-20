@@ -1,21 +1,24 @@
 # Testing And Verification
 
-## Draft Local App Checks
+## Local App Build Checks
 
-The exact commands should be finalized after the Xcode project is created.
+The app currently uses one shared `LumenHorizon` scheme with platform-specific destinations:
 
 ```bash
-xcodebuild -scheme LumenHorizon-iOS -destination 'platform=iOS Simulator,name=iPhone 16' build test
-xcodebuild -scheme LumenHorizon-macOS -destination 'platform=macOS' build test
-xcodebuild -scheme LumenHorizon-visionOS -destination 'platform=visionOS Simulator,name=Apple Vision Pro' build test
+xcodebuild -project app/LumenHorizon/LumenHorizon.xcodeproj -scheme LumenHorizon -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
+xcodebuild -project app/LumenHorizon/LumenHorizon.xcodeproj -scheme LumenHorizon -destination 'generic/platform=macOS' CODE_SIGNING_ALLOWED=NO build
+xcodebuild -project app/LumenHorizon/LumenHorizon.xcodeproj -scheme LumenHorizon -destination 'generic/platform=visionOS Simulator' CODE_SIGNING_ALLOWED=NO build
 ```
 
-The visionOS check requires an installed visionOS SDK and simulator runtime. If unavailable, record the skipped check and reason in the chunk handoff.
+The visionOS check requires an installed Xcode version with the visionOS SDK. If unavailable, record the skipped check and reason in the chunk handoff.
 
-If a shared Swift package exists:
+Simulator-backed unit and UI tests are deferred until the shared scheme or test plan can run them without making the build-only CI path flaky.
+
+The shared app package can be built directly when app core changes:
 
 ```bash
-swift test
+cd app/LumenHorizon/AppCore
+swift build
 ```
 
 ## Contract Fixture Checks
