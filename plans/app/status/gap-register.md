@@ -27,4 +27,6 @@ This register tracks active native app product gaps.
 
 ## Closed Gaps
 
-No app gaps are closed yet.
+| ID | Area | Resolution |
+| --- | --- | --- |
+| APP-001 | Project foundation | Multiplatform Xcode project (iOS/macOS/visionOS) builds in Debug and Release; the shared `AppCore` Swift package provides app configuration, environment-driven API base URLs, and map defaults; environment values flow from Debug/Release build settings through `Info.plist` into `AppRuntimeConfiguration`; `AppCore` unit tests cover configuration parsing and the release-points-at-local guard. |
