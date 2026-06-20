@@ -16,22 +16,25 @@
 | `xcodebuild` | Non-interactive local and CI validation. |
 | `just` | Optional repository-level wrapper for app and backend smoke commands. |
 
-## Draft Local Commands
+## Local Build Commands
 
-The exact commands should be finalized when the Xcode project exists.
+The app currently uses one shared `LumenHorizon` scheme with platform-specific destinations:
 
 ```bash
-xcodebuild -scheme LumenHorizon-iOS -destination 'platform=iOS Simulator,name=iPhone 16' build test
-xcodebuild -scheme LumenHorizon-macOS -destination 'platform=macOS' build test
-xcodebuild -scheme LumenHorizon-visionOS -destination 'platform=visionOS Simulator,name=Apple Vision Pro' build test
+xcodebuild -project app/LumenHorizon/LumenHorizon.xcodeproj -scheme LumenHorizon -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
+xcodebuild -project app/LumenHorizon/LumenHorizon.xcodeproj -scheme LumenHorizon -destination 'generic/platform=macOS' CODE_SIGNING_ALLOWED=NO build
+xcodebuild -project app/LumenHorizon/LumenHorizon.xcodeproj -scheme LumenHorizon -destination 'generic/platform=visionOS Simulator' CODE_SIGNING_ALLOWED=NO build
 ```
 
-The visionOS check requires an installed visionOS SDK and simulator runtime; skip it only with an explicit note in the chunk handoff when that runtime is unavailable.
+The visionOS check requires an installed Xcode version with the visionOS SDK. Skip it only with an explicit note in the chunk handoff when that SDK is unavailable.
 
-If the app uses a shared Swift package:
+Simulator-backed unit and UI tests are deferred until the shared scheme or test plan can run them without making the build-only CI path flaky.
+
+The shared app package can be built directly when app core changes:
 
 ```bash
-swift test
+cd app/LumenHorizon/AppCore
+swift build
 ```
 
 Optional repository-level wrappers can be added after the project exists:
@@ -56,13 +59,16 @@ Then launch the app with its debug API base URL pointed at the local API Gateway
 
 ## CI Jobs
 
-Draft CI should include:
+CI includes:
 
-- Build and test the shared app package or app core target.
-- Build and test the iOS target on a simulator.
-- Build and test the macOS target.
-- Build and test the visionOS target on a simulator when the CI runner provides the required SDK and runtime.
-- Run UI smoke tests if runtime and simulator stability are acceptable.
+- Build the iOS target for a generic simulator destination.
+- Build the macOS target.
+- Build the visionOS target for a generic simulator destination when the CI runner provides the required SDK.
+
+Future CI expansion should include:
+
+- Unit tests for shared app code.
+- UI smoke tests if runtime and simulator stability are acceptable.
 
 CI must not require private backend credentials or a live API Gateway. Contract fixtures should cover normal and error envelope shapes.
 
