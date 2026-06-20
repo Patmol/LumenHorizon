@@ -6,9 +6,8 @@
 .swiftpm/
 DerivedData/
 Packages/
-*.xcodeproj/
-*.xcworkspace/
 xcuserdata/
+*.xcuserstate
 *.playground/
 
 # Rust
