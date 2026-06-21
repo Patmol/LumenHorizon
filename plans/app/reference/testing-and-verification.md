@@ -12,13 +12,14 @@ xcodebuild -project app/LumenHorizon/LumenHorizon.xcodeproj -scheme LumenHorizon
 
 The visionOS check requires an installed Xcode version with the visionOS SDK. If unavailable, record the skipped check and reason in the chunk handoff.
 
-Simulator-backed unit and UI tests are deferred until the shared scheme or test plan can run them without making the build-only CI path flaky.
+Simulator-backed app unit and UI tests are deferred until the shared scheme or test plan can run them without making the build-only CI path flaky. AppCore package tests can run without simulator boot.
 
 The shared app package can be built directly when app core changes:
 
 ```bash
 cd app/LumenHorizon/AppCore
 swift build
+swift test
 ```
 
 ## Contract Fixture Checks

@@ -28,13 +28,14 @@ xcodebuild -project app/LumenHorizon/LumenHorizon.xcodeproj -scheme LumenHorizon
 
 The visionOS check requires an installed Xcode version with the visionOS SDK. Skip it only with an explicit note in the chunk handoff when that SDK is unavailable.
 
-Simulator-backed unit and UI tests are deferred until the shared scheme or test plan can run them without making the build-only CI path flaky.
+Simulator-backed app unit and UI tests are deferred until the shared scheme or test plan can run them without making the build-only CI path flaky. AppCore package tests can run without simulator boot.
 
 The shared app package can be built directly when app core changes:
 
 ```bash
 cd app/LumenHorizon/AppCore
 swift build
+swift test
 ```
 
 Optional repository-level wrappers can be added after the project exists:
@@ -64,10 +65,11 @@ CI includes:
 - Build the iOS target for a generic simulator destination.
 - Build the macOS target.
 - Build the visionOS target for a generic simulator destination when the CI runner provides the required SDK.
+- Run AppCore package tests after the app build job succeeds.
 
 Future CI expansion should include:
 
-- Unit tests for shared app code.
+- Simulator-backed app target unit tests once they are stable in CI.
 - UI smoke tests if runtime and simulator stability are acceptable.
 
 CI must not require private backend credentials or a live API Gateway. Contract fixtures should cover normal and error envelope shapes.

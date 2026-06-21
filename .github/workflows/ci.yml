@@ -17,6 +17,7 @@ env:
   API_GATEWAY_IMAGE_REPOSITORY: lumenhorizon/api-gateway
   APP_PROJECT: app/LumenHorizon/LumenHorizon.xcodeproj
   APP_SCHEME: LumenHorizon
+  APP_CORE_PACKAGE: app/LumenHorizon/AppCore
 
 jobs:
   rust:
@@ -103,6 +104,22 @@ jobs:
 
       - name: Build visionOS app
         run: xcodebuild -project "${APP_PROJECT}" -scheme "${APP_SCHEME}" -destination 'generic/platform=visionOS Simulator' CODE_SIGNING_ALLOWED=NO build
+
+  apple-app-tests:
+    name: Apple App Tests
+    runs-on: macos-26
+    needs: apple-app
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_26.5.app/Contents/Developer
+
+      - name: Test AppCore package
+        run: swift test
+        working-directory: ${{ env.APP_CORE_PACKAGE }}
 
   docker:
     name: Docker
