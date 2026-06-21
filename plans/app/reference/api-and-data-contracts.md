@@ -142,6 +142,21 @@ GET /api/v1/tiles/sets?limit=20&cursor=<opaque>
 
 The app uses tile-set summaries for historical selection. List responses include `meta.next_cursor` when another page exists. Cursors are opaque and must not be parsed.
 
+Each list item is a tile-set summary. It mirrors the manifest's identity and zoom/bounds metadata but omits `tile_url_template` and `checksums`; fetch the full manifest by id when those are needed.
+
+| Field | App use |
+| --- | --- |
+| `tile_set_id` | Immutable overlay identity and saved selection key. |
+| `dataset_date` | Dataset label and tile-set picker grouping. |
+| `classification_version` | Match against tile class metadata. |
+| `render_version` | Diagnostics and metadata panel. |
+| `format` | Must be `png` for the first app version. |
+| `min_zoom`, `max_native_zoom`, `max_display_zoom` | Zoom range guards. |
+| `bounds` | Coverage extent. |
+| `tile_count` | Metadata panel and diagnostics. |
+| `latest` | Latest tile-set indicator in the picker. |
+| `created_at` | Freshness/sort ordering. |
+
 ## PNG Tiles
 
 The manifest `tile_url_template` provides the preferred tile URL source for MapKit:

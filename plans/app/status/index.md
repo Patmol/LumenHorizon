@@ -31,4 +31,4 @@ The active app roadmap is at [../00-implementation-roadmap.md](../00-implementat
 
 ## Remaining Work
 
-See [gap-register.md](gap-register.md). Project foundation (APP-001) is closed; the remaining app implementation gaps are open from Chunk 2 onward.
+See [gap-register.md](gap-register.md). Project foundation (APP-001) and backend contracts (APP-002) are closed; the remaining app implementation gaps are open from Chunk 3 onward.
