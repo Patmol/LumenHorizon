@@ -15,8 +15,7 @@ This register tracks active native app product gaps.
 
 | ID | Severity | Area | Gap | Target chunk |
 | --- | --- | --- | --- | --- |
-| APP-001 | High | Project foundation | No iOS, macOS, and visionOS project targets, shared module structure, or app configuration exists in the app plan baseline. | Chunk 1 |
-| APP-002 | Critical | Backend contracts | No typed Swift client, envelope decoding, manifest validation, or class metadata model exists. | Chunk 2 |
+| APP-003 | Critical | Map rendering | No MapKit tile overlay integration exists for backend PNG tiles. | Chunk 3 |
 | APP-003 | Critical | Map rendering | No MapKit tile overlay integration exists for backend PNG tiles. | Chunk 3 |
 | APP-004 | High | Product copy | No app UX exists to explain VIIRS radiance evidence, transparent pixels, limitations, or non-goals. | Chunk 4 |
 | APP-005 | Medium | Tile-set selection | No historical/latest tile-set browser or selected tile-set persistence exists. | Chunk 5 |
