@@ -69,9 +69,9 @@ Required fields for the app:
 | `min_zoom` | Minimum supported tile zoom. |
 | `max_native_zoom` | Maximum native tile request zoom. |
 | `max_display_zoom` | Maximum useful display zoom. |
-| `bounds` | Coverage extent. |
+| `bounds` | Union of published, non-empty evidence-bearing tile coverage. |
 | `tile_url_template` | URL template for `MKTileOverlay`. |
-| `tile_count` | Metadata panel and diagnostics. |
+| `tile_count` | Count of published evidence-bearing PNG tiles. |
 | `checksums.manifest_sha256` | Integrity evidence display/diagnostics. |
 
 Example:

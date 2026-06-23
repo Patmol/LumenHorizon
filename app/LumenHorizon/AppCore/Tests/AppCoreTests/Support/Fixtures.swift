@@ -6,6 +6,7 @@
 //
 
 import Foundation
+@testable import AppCore
 
 /// Backend-aligned JSON fixtures, mirroring the contract reference examples.
 enum Fixtures {
@@ -138,5 +139,64 @@ enum Fixtures {
         }
         """
     }
-}
 
+    // MARK: Overlay-config builders (Chunk 3)
+
+    /// A standalone manifest JSON object with overridable fields, for
+    /// `TileOverlayConfiguration` validation tests.
+    static func overlayManifestJSON(
+        tileSetId: String = "ts-overlay-1",
+        format: String = "png",
+        template: String = validTemplate,
+        tileSize: Int = 256,
+        minZoom: Int = 3,
+        maxNativeZoom: Int = 10,
+        maxDisplayZoom: Int = 12,
+        west: Double = -125.0,
+        south: Double = 24.0,
+        east: Double = -66.0,
+        north: Double = 50.0
+    ) -> String {
+        """
+        {
+          "tile_set_id": "\(tileSetId)",
+          "dataset_date": "2026-05-21",
+          "generated_at": "2026-05-21T09:15:00Z",
+          "classification_version": "radiance-dark-sky-v1",
+          "render_version": "tiles-v1",
+          "format": "\(format)",
+          "tile_size": \(tileSize),
+          "min_zoom": \(minZoom),
+          "max_native_zoom": \(maxNativeZoom),
+          "max_display_zoom": \(maxDisplayZoom),
+          "bounds": { "west": \(west), "south": \(south), "east": \(east), "north": \(north) },
+          "tile_url_template": "\(template)",
+          "tile_count": 12345,
+          "checksums": { "manifest_sha256": "abc123" }
+        }
+        """
+    }
+
+    /// Decodes an overlay manifest fixture into a `TileManifest`.
+    static func overlayManifest(
+        tileSetId: String = "ts-overlay-1",
+        format: String = "png",
+        template: String = validTemplate,
+        tileSize: Int = 256,
+        minZoom: Int = 3,
+        maxNativeZoom: Int = 10,
+        maxDisplayZoom: Int = 12,
+        west: Double = -125.0,
+        south: Double = 24.0,
+        east: Double = -66.0,
+        north: Double = 50.0
+    ) throws -> TileManifest {
+        let json = overlayManifestJSON(
+            tileSetId: tileSetId, format: format, template: template,
+            tileSize: tileSize, minZoom: minZoom, maxNativeZoom: maxNativeZoom,
+            maxDisplayZoom: maxDisplayZoom,
+            west: west, south: south, east: east, north: north
+        )
+        return try JSONDecoder().decode(TileManifest.self, from: Data(json.utf8))
+    }
+}

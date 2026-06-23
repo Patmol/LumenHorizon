@@ -28,6 +28,12 @@ az storage container create \
   --output none
 az storage container create \
   --name processed-tiles \
+  --public-access blob \
+  --connection-string "$AZURITE_CONNECTION_STRING" \
+  --output none
+az storage container set-permission \
+  --name processed-tiles \
+  --public-access blob \
   --connection-string "$AZURITE_CONNECTION_STRING" \
   --output none
 az storage container create \

@@ -47,7 +47,7 @@ struct AppConfigurationTests {
 
     @Test("API configuration rejects invalid timeout")
     func apiConfigurationRejectsInvalidTimeout() throws {
-        let url = try #require(URL(string: "https://api.lumenhorizon.app"))
+        let url = try #require(URL(string: "https://api.lumenhorizon.com"))
 
         #expect(throws: AppConfigurationError.invalidRequestTimeout(0)) {
             _ = try APIConfiguration(baseURL: url, requestTimeout: 0)
@@ -70,7 +70,7 @@ struct AppConfigurationTests {
 
     @Test("configuration can use explicit API base URL")
     func configurationCanUseExplicitAPIBaseURL() throws {
-        let url = try #require(URL(string: "https://dev-api.lumenhorizon.app"))
+        let url = try #require(URL(string: "https://dev-api.lumenhorizon.com"))
 
         let configuration = try AppConfiguration.make(
             environment: .local,

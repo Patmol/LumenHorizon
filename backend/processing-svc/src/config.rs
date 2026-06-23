@@ -707,6 +707,29 @@ mod tests {
     }
 
     #[test]
+    fn defaults_tile_cdn_base_url_to_production_cdn_when_unset() {
+        let config = load_from(valid_env()).unwrap();
+
+        assert_eq!(config.tile_cdn_base_url, "https://tiles.lumenhorizon.com");
+    }
+
+    #[test]
+    fn loads_tile_cdn_base_url_override_and_trims_trailing_slash() {
+        let mut env = valid_env();
+        env.insert(
+            "TILE_CDN_BASE_URL",
+            "http://127.0.0.1:10000/devstoreaccount1/processed-tiles/".to_owned(),
+        );
+
+        let config = load_from(env).unwrap();
+
+        assert_eq!(
+            config.tile_cdn_base_url,
+            "http://127.0.0.1:10000/devstoreaccount1/processed-tiles"
+        );
+    }
+
+    #[test]
     fn loads_retention_overrides() {
         let mut env = valid_env();
         env.insert("RAW_GRANULE_RETENTION_DAYS", "120".to_owned());

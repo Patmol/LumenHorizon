@@ -298,6 +298,20 @@ mod tests {
     }
 
     #[test]
+    fn builds_tile_url_template_from_local_azurite_container_base() {
+        let template = build_tile_url_template(
+            "http://127.0.0.1:10000/devstoreaccount1/processed-tiles/",
+            "2026-05-21-radiance-dark-sky-v1-a1b2c3d4",
+        )
+        .unwrap();
+
+        assert_eq!(
+            template,
+            "http://127.0.0.1:10000/devstoreaccount1/processed-tiles/tiles/2026-05-21-radiance-dark-sky-v1-a1b2c3d4/{z}/{x}/{y}.png"
+        );
+    }
+
+    #[test]
     fn rejects_container_prefixed_tile_set_id_in_url_template() {
         assert!(matches!(
             build_tile_url_template(

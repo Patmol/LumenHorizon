@@ -19,6 +19,13 @@ const PNG_CONTENT_TYPE: &str = "image/png";
 pub struct RenderedTile {
     pub coord: TileCoord,
     pub png_bytes: Vec<u8>,
+    pub renderable_pixel_count: u32,
+}
+
+impl RenderedTile {
+    pub fn has_renderable_evidence(&self) -> bool {
+        self.renderable_pixel_count > 0
+    }
 }
 
 #[derive(Debug, Error)]
@@ -156,6 +163,7 @@ mod tests {
         let tile = RenderedTile {
             coord: TileCoord { z: 5, x: 8, y: 12 },
             png_bytes: vec![137, 80, 78, 71],
+            renderable_pixel_count: 1,
         };
 
         let path = tile_blob_path("2026-05-21-radiance-dark-sky-v1-a1b2c3d4", tile.coord).unwrap();
@@ -214,6 +222,7 @@ mod tests {
             tiles: vec![RenderedTile {
                 coord: TileCoord { z: 3, x: 2, y: 3 },
                 png_bytes: b"fake-png".to_vec(),
+                renderable_pixel_count: 1,
             }],
             manifest,
         };
@@ -262,10 +271,12 @@ mod tests {
             RenderedTile {
                 coord: TileCoord { z: 3, x: 2, y: 3 },
                 png_bytes: b"fake-png-a".to_vec(),
+                renderable_pixel_count: 1,
             },
             RenderedTile {
                 coord: TileCoord { z: 3, x: 2, y: 4 },
                 png_bytes: b"fake-png-b".to_vec(),
+                renderable_pixel_count: 1,
             },
         ];
 

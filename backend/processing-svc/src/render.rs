@@ -61,6 +61,13 @@ pub fn render_png_tile(tile_size: u16, pixels: &[RenderPixel]) -> Result<Vec<u8>
     Ok(png)
 }
 
+pub fn renderable_pixel_count(pixels: &[RenderPixel]) -> u32 {
+    pixels
+        .iter()
+        .filter(|pixel| pixel.radiance.is_some() && !pixel.rejected)
+        .count() as u32
+}
+
 pub fn render_pixel(pixel: RenderPixel) -> Result<Rgba<u8>, RenderError> {
     if pixel.rejected {
         return Ok(Rgba([0, 0, 0, 0]));
@@ -121,6 +128,26 @@ mod tests {
             .unwrap(),
             Rgba([0, 0, 0, 0])
         );
+    }
+
+    #[test]
+    fn counts_renderable_pixels() {
+        let pixels = [
+            RenderPixel {
+                radiance: Some(0.1),
+                rejected: false,
+            },
+            RenderPixel {
+                radiance: Some(0.5),
+                rejected: true,
+            },
+            RenderPixel {
+                radiance: None,
+                rejected: false,
+            },
+        ];
+
+        assert_eq!(renderable_pixel_count(&pixels), 1);
     }
 
     #[test]
@@ -188,5 +215,22 @@ mod tests {
 
         assert_eq!(first, second);
         assert!(first.starts_with(b"\x89PNG\r\n\x1a\n"));
+    }
+
+    #[test]
+    fn rendered_png_dimensions_match_tile_size() {
+        let pixels = vec![
+            RenderPixel {
+                radiance: Some(0.1),
+                rejected: false,
+            };
+            9
+        ];
+
+        let png = render_png_tile(3, &pixels).unwrap();
+        let image = image::load_from_memory(&png).unwrap();
+
+        assert_eq!(image.width(), 3);
+        assert_eq!(image.height(), 3);
     }
 }

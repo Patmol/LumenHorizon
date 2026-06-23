@@ -89,6 +89,28 @@ pub fn tile_bounds(coord: TileCoord) -> Result<GeographicBounds, TileMathError> 
     })
 }
 
+pub fn bounds_for_tiles<I>(coords: I) -> Result<Option<GeographicBounds>, TileMathError>
+where
+    I: IntoIterator<Item = TileCoord>,
+{
+    let mut union: Option<GeographicBounds> = None;
+
+    for coord in coords {
+        let bounds = tile_bounds(coord)?;
+        union = Some(match union {
+            Some(existing) => GeographicBounds {
+                west: existing.west.min(bounds.west),
+                south: existing.south.min(bounds.south),
+                east: existing.east.max(bounds.east),
+                north: existing.north.max(bounds.north),
+            },
+            None => bounds,
+        });
+    }
+
+    Ok(union)
+}
+
 pub fn clip_bounds(
     bounds: GeographicBounds,
     clip_to: GeographicBounds,
@@ -232,6 +254,28 @@ mod tests {
         assert_eq!(bounds.east, 180.0);
         assert!(bounds.north > 85.0);
         assert!(bounds.south < -85.0);
+    }
+
+    #[test]
+    fn returns_none_for_empty_tile_bounds_union() {
+        assert_eq!(bounds_for_tiles([]).unwrap(), None);
+    }
+
+    #[test]
+    fn unions_tile_bounds() {
+        let bounds = bounds_for_tiles([
+            TileCoord { z: 2, x: 1, y: 1 },
+            TileCoord { z: 2, x: 2, y: 2 },
+        ])
+        .unwrap()
+        .unwrap();
+        let first = tile_bounds(TileCoord { z: 2, x: 1, y: 1 }).unwrap();
+        let second = tile_bounds(TileCoord { z: 2, x: 2, y: 2 }).unwrap();
+
+        assert_eq!(bounds.west, first.west);
+        assert_eq!(bounds.north, first.north);
+        assert_eq!(bounds.east, second.east);
+        assert_eq!(bounds.south, second.south);
     }
 
     #[test]

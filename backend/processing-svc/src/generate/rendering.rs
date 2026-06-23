@@ -6,14 +6,18 @@
 use std::path::Path;
 
 use crate::{
-    hdf_cli::{self, RasterOutputSize, RasterSample, RasterWindow},
+    hdf_cli::{self, RasterOutputSize, RasterSample},
     publish::RenderedTile,
-    render::{render_png_tile, RenderPixel},
+    render::{render_png_tile, renderable_pixel_count, RenderPixel},
     science::{self, DatasetMapping},
     tiles::TileCoord,
 };
 
 use super::error::GenerateError;
+use super::window::{TilePixelWindow, TileRasterWindow};
+
+#[cfg(test)]
+use crate::hdf_cli::RasterWindow;
 
 /// Converts aligned raster samples into renderable tile pixels.
 ///
@@ -65,7 +69,7 @@ pub fn render_pixels_from_samples(
 pub fn render_tile_window_from_samples(
     mapping: &DatasetMapping,
     coord: TileCoord,
-    window: RasterWindow,
+    window: hdf_cli::RasterWindow,
     radiance_samples: &[RasterSample],
     quality_samples: &[RasterSample],
     cloud_samples: Option<&[RasterSample]>,
@@ -104,8 +108,13 @@ pub fn render_tile_from_samples(
 
     let png_bytes = render_png_tile(tile_size, &pixels)
         .map_err(|source| GenerateError::RenderTile { coord, source })?;
+    let renderable_pixel_count = renderable_pixel_count(&pixels);
 
-    Ok(RenderedTile { coord, png_bytes })
+    Ok(RenderedTile {
+        coord,
+        png_bytes,
+        renderable_pixel_count,
+    })
 }
 
 #[cfg(test)]
@@ -128,45 +137,53 @@ pub fn render_tile_window_from_granule(
     granule_path: &Path,
     mapping: &DatasetMapping,
     coord: TileCoord,
-    window: RasterWindow,
+    window: TileRasterWindow,
     tile_size: u16,
 ) -> Result<RenderedTile, GenerateError> {
     let output_size = RasterOutputSize {
-        width: usize::from(tile_size),
-        height: usize::from(tile_size),
+        width: window.target.width,
+        height: window.target.height,
     };
 
-    let radiance_samples = hdf_cli::dataset_window_samples_resized(
+    let radiance_samples = tile_samples_from_resized_window(
         granule_path,
         mapping.radiance_dataset,
         window,
         output_size,
+        tile_size,
+        mapping.radiance_fill_value,
     )?;
 
-    let quality_samples = hdf_cli::dataset_window_samples_resized(
+    let quality_samples = tile_samples_from_resized_window(
         granule_path,
         mapping.quality_dataset,
         window,
         output_size,
+        tile_size,
+        f32::from(u8::MAX),
     )?;
 
     // Cloud and observation-count datasets vary by VIIRS product cadence.
     let cloud_samples = match mapping.cloud_dataset {
-        Some(dataset) => Some(hdf_cli::dataset_window_samples_resized(
+        Some(dataset) => Some(tile_samples_from_resized_window(
             granule_path,
             dataset,
             window,
             output_size,
+            tile_size,
+            0.0,
         )?),
         None => None,
     };
 
     let observation_count_samples = match mapping.observation_count_dataset {
-        Some(dataset) => Some(hdf_cli::dataset_window_samples_resized(
+        Some(dataset) => Some(tile_samples_from_resized_window(
             granule_path,
             dataset,
             window,
             output_size,
+            tile_size,
+            0.0,
         )?),
         None => None,
     };
@@ -180,6 +197,67 @@ pub fn render_tile_window_from_granule(
         cloud_samples.as_deref(),
         observation_count_samples.as_deref(),
     )
+}
+
+fn tile_samples_from_resized_window(
+    granule_path: &Path,
+    dataset: &'static str,
+    window: TileRasterWindow,
+    output_size: RasterOutputSize,
+    tile_size: u16,
+    fill_value: f32,
+) -> Result<Vec<RasterSample>, GenerateError> {
+    let samples =
+        hdf_cli::dataset_window_samples_resized(granule_path, dataset, window.source, output_size)?;
+
+    expand_samples_to_tile(
+        dataset,
+        &samples,
+        usize::from(tile_size),
+        window.target,
+        fill_value,
+    )
+}
+
+fn expand_samples_to_tile(
+    dataset: &'static str,
+    samples: &[RasterSample],
+    tile_size: usize,
+    target: TilePixelWindow,
+    fill_value: f32,
+) -> Result<Vec<RasterSample>, GenerateError> {
+    let expected = target.width * target.height;
+    if samples.len() != expected {
+        return Err(GenerateError::ResizedSampleCountMismatch {
+            dataset,
+            expected,
+            actual: samples.len(),
+        });
+    }
+
+    let mut expanded = (0..(tile_size * tile_size))
+        .map(|index| RasterSample {
+            x: (index % tile_size) as f64,
+            y: (index / tile_size) as f64,
+            value: fill_value,
+        })
+        .collect::<Vec<_>>();
+
+    for row in 0..target.height {
+        for column in 0..target.width {
+            let source_index = row * target.width + column;
+            let destination_x = target.x_offset + column;
+            let destination_y = target.y_offset + row;
+            let destination_index = destination_y * tile_size + destination_x;
+            expanded[destination_index] = RasterSample {
+                x: destination_x as f64,
+                y: destination_y as f64,
+                value: samples[source_index].value,
+            };
+        }
+    }
+
+    Ok(expanded)
 }
 
 /// Validates that all present datasets describe the same resized output grid.
@@ -245,7 +323,72 @@ mod tests {
         .unwrap();
 
         assert_eq!(rendered.coord, TileCoord { z: 5, x: 8, y: 12 });
+        assert_eq!(rendered.renderable_pixel_count, 4);
         assert!(rendered.png_bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+    }
+
+    #[test]
+    fn expands_partial_window_samples_into_full_tile_with_fill_value() {
+        let expanded = expand_samples_to_tile(
+            "test-dataset",
+            &[
+                RasterSample {
+                    x: 0.0,
+                    y: 0.0,
+                    value: 1.0,
+                },
+                RasterSample {
+                    x: 0.0,
+                    y: 1.0,
+                    value: 2.0,
+                },
+            ],
+            3,
+            TilePixelWindow {
+                x_offset: 1,
+                y_offset: 1,
+                width: 1,
+                height: 2,
+            },
+            -999.9,
+        )
+        .unwrap();
+
+        assert_eq!(expanded.len(), 9);
+        assert_eq!(expanded[4].value, 1.0);
+        assert_eq!(expanded[7].value, 2.0);
+        assert_eq!(expanded[0].value, -999.9);
+        assert_eq!(expanded[8].value, -999.9);
+    }
+
+    #[test]
+    fn rejects_resized_sample_count_mismatch() {
+        let error = expand_samples_to_tile(
+            "test-dataset",
+            &[RasterSample {
+                x: 0.0,
+                y: 0.0,
+                value: 1.0,
+            }],
+            3,
+            TilePixelWindow {
+                x_offset: 1,
+                y_offset: 1,
+                width: 1,
+                height: 2,
+            },
+            -999.9,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            GenerateError::ResizedSampleCountMismatch {
+                dataset: "test-dataset",
+                expected: 2,
+                actual: 1,
+            }
+        ));
     }
 
     #[test]
@@ -382,6 +525,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(rendered.coord, TileCoord { z: 5, x: 8, y: 12 });
+        assert_eq!(rendered.renderable_pixel_count, 4);
         assert!(rendered.png_bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
     }
 

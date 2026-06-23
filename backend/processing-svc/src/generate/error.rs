@@ -44,6 +44,16 @@ pub enum GenerateError {
         observation_count: Option<usize>,
     },
 
+    #[error("no renderable tile evidence in generated coverage {generation_bounds:?}")]
+    NoRenderableTiles { generation_bounds: GeographicBounds },
+
+    #[error("resized dataset '{dataset}' returned {actual} sample(s), expected {expected}")]
+    ResizedSampleCountMismatch {
+        dataset: &'static str,
+        expected: usize,
+        actual: usize,
+    },
+
     #[error("tile render worker failed: {source}")]
     RenderWorker {
         #[source]

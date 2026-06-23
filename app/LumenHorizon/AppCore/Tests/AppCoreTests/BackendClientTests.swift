@@ -13,7 +13,7 @@ import Testing
 struct BackendClientTests {
     private func makeClient(_ session: StubHTTPClient) throws -> BackendClient {
         let api = try APIConfiguration(
-            baseURL: #require(URL(string: "https://api.lumenhorizon.app")),
+            baseURL: #require(URL(string: "https://api.lumenhorizon.com")),
             requestTimeout: 15
         )
         return BackendClient(api: api, session: session)

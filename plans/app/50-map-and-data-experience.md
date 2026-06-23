@@ -26,12 +26,12 @@ Initial map screen responsibilities:
 
 | Manifest field | App behavior |
 | --- | --- |
-| `bounds` | Fit initial camera when data loads and explain areas outside coverage. |
-| `min_zoom` | Avoid showing overlay controls as active below supported detail. |
+| `bounds` | Bound the active overlay camera to published coverage and explain areas outside coverage. |
+| `min_zoom` | Farthest active overlay camera zoom. |
 | `max_native_zoom` | Maximum native tile request zoom. |
-| `max_display_zoom` | Maximum useful display zoom before tiles are over-scaled. |
+| `max_display_zoom` | Closest active overlay camera zoom before tiles are over-scaled. |
 
-MapKit may still render base-map content outside tile coverage. The app should make the overlay coverage and data state clear rather than blocking normal map navigation.
+MapKit may still render base-map content outside tile coverage before a manifest is loaded or when no overlay is active. When a dark-sky overlay is active, camera zoom and panning are constrained from manifest metadata so the visible map does not imply overlay coverage outside the published tile set.
 
 ## Legend
 

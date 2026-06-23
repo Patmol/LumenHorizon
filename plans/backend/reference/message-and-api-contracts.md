@@ -92,6 +92,11 @@ Add new fields only in a backward-compatible way. Version the message for breaki
 
 The Apple client fetches a manifest first, then configures `MKTileOverlay` with `tile_url_template`.
 
+Manifest `bounds` describe the union of published, non-empty evidence-bearing
+tile coverage, derived from native tile coordinates. `tile_count` counts the
+published evidence-bearing PNG tiles. Individual PNGs can still contain
+transparent no-data pixels, especially along source-granule edges.
+
 Current Chunk 9 processing-generated tile-set IDs use `{dataset_date}-{classification_version}-{ingest_id_prefix}-a{attempt}`. Blob paths remain container-relative and must not include `processed-tiles/`.
 
 Retention cleanup may delete whole stale tile-set outputs after the processed tile-set retention window, but it must not overwrite immutable tile blobs or immutable manifests in place. The mutable `manifests/latest.json` pointer is never deleted by cleanup and must point only to a retained immutable manifest.

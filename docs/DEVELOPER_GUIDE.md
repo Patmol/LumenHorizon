@@ -65,12 +65,52 @@ Important local variables from [.env.example](../.env.example):
 | `AZURE_STORAGE_EMULATOR_HOST` | `127.0.0.1` | Azurite host. |
 | `AZURE_QUEUE_NAME` | `viirs-processing` | Processing queue name. |
 | `PROCESSED_TILES_CONTAINER` | `processed-tiles` | Processed tile artifact and manifest container. |
+| `TILE_CDN_BASE_URL` | Azurite blob URL | Base URL stamped into newly generated tile manifests for direct tile loading. |
 | `RATE_LIMIT_BACKEND` | `memory` | Local in-memory rate-limit backend; use `redis` with `REDIS_URL` for distributed profiles. |
 | `MAX_URL_LENGTH_BYTES` | `8192` | Gateway URL length limit. |
 | `ADMIN_MAX_BODY_BYTES` | `65536` | Gateway admin write body limit. |
 | `PUBLIC_ROUTE_TIMEOUT_SECONDS` | `5` | Public route timeout. |
 | `ADMIN_ROUTE_TIMEOUT_SECONDS` | `15` | Admin route timeout. |
 | `HEALTH_ROUTE_TIMEOUT_SECONDS` | `2` | Health/readiness timeout. |
+
+The local `TILE_CDN_BASE_URL` in [.env.example](../.env.example) points at Azurite's anonymous blob endpoint for `processed-tiles`. That keeps the native app on the production-style manifest contract while making local tile URLs reachable from the simulator and macOS app. Existing `.env` files are not rewritten by `just setup`; update or recreate `.env` before regenerating manifests if it still points at `https://tiles.lumenhorizon.com`.
+
+## Local Tile Smoke
+
+Local tile URLs are baked into each generated manifest. After changing `TILE_CDN_BASE_URL`, regenerate a tile set so the latest manifest carries the new base URL.
+
+```bash
+just up
+just migrate
+```
+
+Start the HTTP services in separate terminals:
+
+```bash
+just serve
+```
+
+```bash
+just serve-api
+```
+
+In another terminal, ingest or recover a queue message, then process one visible message:
+
+```bash
+cd backend
+set -a && source ../.env && set +a
+cargo run -p processing-svc -- process-once
+```
+
+Confirm the manifest and one substituted tile URL are reachable without storage auth headers:
+
+```bash
+curl -s http://127.0.0.1:8080/api/v1/tiles/manifest | jq '.data.tile_url_template'
+curl -s "http://127.0.0.1:10000/devstoreaccount1/processed-tiles/tiles/<tile-set-id>/<z>/<x>/<y>.png" -o tile.png
+file tile.png
+```
+
+`file tile.png` should report PNG image data. If the manifest still advertises `tiles.lumenhorizon.com`, update `.env` and process a new tile set; previously generated manifests keep their original URL template.
 
 ## Local Smoke Evidence
 

@@ -94,7 +94,7 @@ public struct AppConfiguration: Equatable, Sendable {
         case .preview:
             return URL(string: "https://preview.invalid")!
         case .release:
-            return URL(string: "https://api.lumenhorizon.app")!
+            return URL(string: "https://api.lumenhorizon.com")!
         }
     }
     

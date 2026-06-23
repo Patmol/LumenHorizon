@@ -9,7 +9,7 @@ import Foundation
 
 /// Builds concrete `URLRequest`s for `BackendEndpoint`s against a base URL.
 ///
-/// The base URL is the host root (e.g. `https://api.lumenhorizon.app`);
+/// The base URL is the host root (e.g. `https://api.lumenhorizon.com`);
 /// this builder appends the `/api/v1` version prefix and endpoint segments.
 public struct BackendRequestBuilder: Sendable {
     /// API host root, without the `/api/v1` suffix.

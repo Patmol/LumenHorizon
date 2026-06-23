@@ -54,7 +54,7 @@ The current runtime uses Azurite-compatible Blob and Queue REST APIs.
 | `TILE_FORMAT` | no | `png` | Generated tile format. |
 | `TILE_CLASSIFICATION_VERSION` | no | `radiance-dark-sky-v1` | Tile classification version. |
 | `TILE_RENDER_VERSION` | no | `tiles-v1` | Tile renderer version. |
-| `TILE_CDN_BASE_URL` | no | service default | Base URL used to build tile URL templates. |
+| `TILE_CDN_BASE_URL` | no | service default; local `.env.example` uses Azurite | Base URL used to build tile URL templates. The service default remains the production CDN when unset. |
 | `TILE_BOUNDS` | no | service default | Generated tile bounds as `west,south,east,north`. |
 | `TILE_IMMUTABLE_CACHE_CONTROL` | no | immutable cache header | Cache header for immutable tile and manifest blobs. |
 | `TILE_LATEST_CACHE_CONTROL` | no | latest cache header | Cache header for `manifests/latest.json` and latest manifest API responses. |

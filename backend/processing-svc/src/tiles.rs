@@ -1,8 +1,8 @@
 use crate::config::TileBounds;
 pub use shared::slippy_tiles::{
-    clip_bounds, latest_manifest_blob_path, manifest_blob_path, tile_blob_path, tile_bounds,
-    tile_range_for_bounds, viirs_tile_bounds, GeographicBounds, TileCoord, TileMathError,
-    TileRange,
+    bounds_for_tiles, clip_bounds, latest_manifest_blob_path, manifest_blob_path, tile_blob_path,
+    tile_bounds, tile_range_for_bounds, viirs_tile_bounds, GeographicBounds, TileCoord,
+    TileMathError, TileRange,
 };
 
 #[cfg(test)]

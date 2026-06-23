@@ -10,11 +10,11 @@ use tokio::task::JoinSet;
 
 use crate::{
     config::AppConfig,
-    hdf_cli::{RasterShape, RasterWindow},
+    hdf_cli::RasterShape,
     manifest::{SourceGranule, TileManifest, TileManifestInput},
     publish::RenderedTile,
     science::DatasetMapping,
-    tiles::{clip_bounds, GeographicBounds, TileCoord},
+    tiles::{bounds_for_tiles, clip_bounds, GeographicBounds, TileCoord},
     ui,
 };
 
@@ -23,7 +23,7 @@ use super::{
     planning::plan_tile_generation_for_bounds,
     rendering::render_tile_window_from_granule,
     types::{GeneratedTileSet, TileGenerationPlan},
-    window::raster_window_for_tile,
+    window::{raster_window_for_tile, TileRasterWindow},
 };
 
 /// Generates rendered tiles and a manifest for one source granule.
@@ -128,7 +128,7 @@ async fn generate_tile_set_with_renderer<RenderTile, RenderFuture>(
     render_tile: RenderTile,
 ) -> Result<GeneratedTileSet, GenerateError>
 where
-    RenderTile: Fn(TileCoord, RasterWindow) -> RenderFuture + Clone + Send + 'static,
+    RenderTile: Fn(TileCoord, TileRasterWindow) -> RenderFuture + Clone + Send + 'static,
     RenderFuture: Future<Output = Result<RenderedTile, GenerateError>> + Send + 'static,
 {
     let TileSetBuildRequest {
@@ -168,14 +168,18 @@ where
         plan.tile_count, tile_set_id, config.tile_min_zoom, config.tile_max_native_zoom
     ));
 
-    let tiles = generate_tiles_for_plan_with_renderer(
+    let rendered_tiles = generate_tiles_for_plan_with_renderer(
         source_bounds,
         raster_shape,
+        config.tile_size,
         &plan,
         config.processing_max_parallelism,
         render_tile,
     )
     .await?;
+    let tiles = non_empty_tiles(rendered_tiles);
+    let coverage_bounds =
+        coverage_bounds_for_tiles(&tiles, config.tile_max_native_zoom, generation_bounds)?;
 
     let manifest = TileManifest::from_config(
         config,
@@ -184,7 +188,7 @@ where
             dataset_date,
             generated_at,
             processor_version,
-            bounds: generation_bounds,
+            bounds: coverage_bounds,
             tile_count: tiles.len() as u32,
             source_granules,
         },
@@ -197,6 +201,33 @@ where
     })
 }
 
+fn non_empty_tiles(tiles: Vec<RenderedTile>) -> Vec<RenderedTile> {
+    tiles
+        .into_iter()
+        .filter(RenderedTile::has_renderable_evidence)
+        .collect()
+}
+
+fn coverage_bounds_for_tiles(
+    tiles: &[RenderedTile],
+    max_native_zoom: u8,
+    generation_bounds: GeographicBounds,
+) -> Result<GeographicBounds, GenerateError> {
+    let native_tiles = tiles
+        .iter()
+        .filter(|tile| tile.coord.z == max_native_zoom)
+        .map(|tile| tile.coord)
+        .collect::<Vec<_>>();
+
+    let coords = if native_tiles.is_empty() {
+        tiles.iter().map(|tile| tile.coord).collect::<Vec<_>>()
+    } else {
+        native_tiles
+    };
+
+    bounds_for_tiles(coords)?.ok_or(GenerateError::NoRenderableTiles { generation_bounds })
+}
+
 /// Renders every coordinate in a tile-generation plan.
 ///
 /// Tile ranges are inclusive. For each planned coordinate, the function maps
@@ -204,17 +235,18 @@ where
 async fn generate_tiles_for_plan_with_renderer<RenderTile, RenderFuture>(
     source_bounds: GeographicBounds,
     raster_shape: RasterShape,
+    tile_size: u16,
     plan: &TileGenerationPlan,
     max_parallelism: usize,
     render_tile: RenderTile,
 ) -> Result<Vec<RenderedTile>, GenerateError>
 where
-    RenderTile: Fn(TileCoord, RasterWindow) -> RenderFuture + Clone + Send + 'static,
+    RenderTile: Fn(TileCoord, TileRasterWindow) -> RenderFuture + Clone + Send + 'static,
     RenderFuture: Future<Output = Result<RenderedTile, GenerateError>> + Send + 'static,
 {
-    let total = plan.tile_count as usize;
+    let jobs = tile_render_jobs(source_bounds, raster_shape, tile_size, plan)?;
+    let total = jobs.len();
     let progress = ui::progress("rendering tiles", total);
-    let jobs = tile_render_jobs(source_bounds, raster_shape, plan)?;
     let max_parallelism = max_parallelism.max(1);
     let mut join_set = JoinSet::new();
     let mut next_job = 0;
@@ -256,15 +288,16 @@ where
 fn tile_render_jobs(
     source_bounds: GeographicBounds,
     raster_shape: RasterShape,
+    tile_size: u16,
     plan: &TileGenerationPlan,
-) -> Result<Vec<(usize, TileCoord, RasterWindow)>, GenerateError> {
+) -> Result<Vec<(usize, TileCoord, TileRasterWindow)>, GenerateError> {
     let mut jobs = Vec::with_capacity(plan.tile_count as usize);
 
     for range in &plan.ranges {
         for x in range.min_x..=range.max_x {
             for y in range.min_y..=range.max_y {
                 let coord = TileCoord { z: range.z, x, y };
-                let window = raster_window_for_tile(coord, source_bounds, raster_shape)?;
+                let window = raster_window_for_tile(coord, source_bounds, raster_shape, tile_size)?;
                 jobs.push((jobs.len(), coord, window));
             }
         }
@@ -280,7 +313,7 @@ mod tests {
 
     use super::*;
     use crate::manifest::SourceGranule;
-    use crate::tiles::TileRange;
+    use crate::tiles::{tile_bounds, TileRange};
 
     fn test_config() -> AppConfig {
         crate::config::AppConfig::from_lookup(|name| match name {
@@ -335,24 +368,26 @@ mod tests {
 
         let rendered_windows = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
 
-        let tiles = generate_tiles_for_plan_with_renderer(source_bounds, raster_shape, &plan, 1, {
-            let rendered_windows = std::sync::Arc::clone(&rendered_windows);
-
-            move |coord, window| {
+        let tiles =
+            generate_tiles_for_plan_with_renderer(source_bounds, raster_shape, 2, &plan, 1, {
                 let rendered_windows = std::sync::Arc::clone(&rendered_windows);
 
-                async move {
-                    rendered_windows.lock().unwrap().push((coord, window));
+                move |coord, window| {
+                    let rendered_windows = std::sync::Arc::clone(&rendered_windows);
 
-                    Ok(RenderedTile {
-                        coord,
-                        png_bytes: b"fake-png".to_vec(),
-                    })
+                    async move {
+                        rendered_windows.lock().unwrap().push((coord, window));
+
+                        Ok(RenderedTile {
+                            coord,
+                            png_bytes: b"fake-png".to_vec(),
+                            renderable_pixel_count: 1,
+                        })
+                    }
                 }
-            }
-        })
-        .await
-        .unwrap();
+            })
+            .await
+            .unwrap();
 
         let rendered_windows = rendered_windows.lock().unwrap();
         assert_eq!(tiles.len(), 1);
@@ -360,8 +395,10 @@ mod tests {
         assert_eq!(tiles[0].png_bytes, b"fake-png");
         assert_eq!(rendered_windows.len(), 1);
         assert_eq!(rendered_windows[0].0, TileCoord { z: 3, x: 2, y: 3 });
-        assert!(rendered_windows[0].1.width > 0);
-        assert!(rendered_windows[0].1.height > 0);
+        assert!(rendered_windows[0].1.source.width > 0);
+        assert!(rendered_windows[0].1.source.height > 0);
+        assert!(rendered_windows[0].1.target.width > 0);
+        assert!(rendered_windows[0].1.target.height > 0);
     }
 
     #[tokio::test]
@@ -389,6 +426,7 @@ mod tests {
                 Ok(RenderedTile {
                     coord,
                     png_bytes: b"fake-png".to_vec(),
+                    renderable_pixel_count: 1,
                 })
             },
         )
@@ -403,6 +441,98 @@ mod tests {
         );
         assert_eq!(tile_set.manifest.tile_size, config.tile_size);
         assert_eq!(tile_set.manifest.checksums.manifest_sha256.len(), 64);
+    }
+
+    #[tokio::test]
+    async fn manifest_uses_non_empty_max_native_tile_coverage() {
+        let config = test_config();
+        let source_bounds = GeographicBounds::from(config.tile_bounds);
+        let raster_shape = RasterShape {
+            width: 1000,
+            height: 1000,
+        };
+        let plan = plan_tile_generation_for_bounds(
+            source_bounds,
+            config.tile_min_zoom,
+            config.tile_max_native_zoom,
+        )
+        .unwrap();
+        let native_range = plan.ranges.last().unwrap();
+        let evidence_coord = TileCoord {
+            z: native_range.z,
+            x: native_range.min_x,
+            y: native_range.min_y,
+        };
+
+        let tile_set = generate_tile_set_with_renderer(
+            &config,
+            TileSetBuildRequest {
+                tile_set_id: "2026-05-21-radiance-dark-sky-v1-a1b2c3d4".to_owned(),
+                dataset_date: chrono::NaiveDate::from_ymd_opt(2026, 5, 21).unwrap(),
+                generated_at: chrono::Utc.with_ymd_and_hms(2026, 5, 21, 9, 15, 0).unwrap(),
+                processor_version: "processing-svc:test-sha".to_owned(),
+                generation_bounds: source_bounds,
+                source_bounds,
+                raster_shape,
+                source_granules: Vec::new(),
+            },
+            move |coord, _window| async move {
+                Ok(RenderedTile {
+                    coord,
+                    png_bytes: b"fake-png".to_vec(),
+                    renderable_pixel_count: u32::from(coord == evidence_coord),
+                })
+            },
+        )
+        .await
+        .unwrap();
+
+        let expected_bounds = tile_bounds(evidence_coord).unwrap();
+
+        assert_eq!(tile_set.tiles.len(), 1);
+        assert_eq!(tile_set.tiles[0].coord, evidence_coord);
+        assert_eq!(tile_set.manifest.tile_count, 1);
+        assert_eq!(tile_set.manifest.bounds, expected_bounds.into());
+    }
+
+    #[tokio::test]
+    async fn zero_evidence_tile_set_is_not_manifested() {
+        let config = test_config();
+        let source_bounds = GeographicBounds::from(config.tile_bounds);
+        let raster_shape = RasterShape {
+            width: 1000,
+            height: 1000,
+        };
+
+        let error = generate_tile_set_with_renderer(
+            &config,
+            TileSetBuildRequest {
+                tile_set_id: "2026-05-21-radiance-dark-sky-v1-a1b2c3d4".to_owned(),
+                dataset_date: chrono::NaiveDate::from_ymd_opt(2026, 5, 21).unwrap(),
+                generated_at: chrono::Utc.with_ymd_and_hms(2026, 5, 21, 9, 15, 0).unwrap(),
+                processor_version: "processing-svc:test-sha".to_owned(),
+                generation_bounds: source_bounds,
+                source_bounds,
+                raster_shape,
+                source_granules: Vec::new(),
+            },
+            |coord, _window| async move {
+                Ok(RenderedTile {
+                    coord,
+                    png_bytes: b"fake-png".to_vec(),
+                    renderable_pixel_count: 0,
+                })
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            GenerateError::NoRenderableTiles {
+                generation_bounds
+            } if generation_bounds == source_bounds
+        ));
     }
 
     #[tokio::test]
@@ -467,6 +597,7 @@ mod tests {
                     Ok(RenderedTile {
                         coord,
                         png_bytes: b"\x89PNG\r\n\x1a\nfixture".to_vec(),
+                        renderable_pixel_count: 1,
                     })
                 },
             )
@@ -527,13 +658,17 @@ mod tests {
                 Ok(RenderedTile {
                     coord,
                     png_bytes: b"fake-png".to_vec(),
+                    renderable_pixel_count: 1,
                 })
             },
         )
         .await
         .unwrap();
 
-        assert_eq!(tile_set.manifest.bounds, source_bounds.into());
+        assert!(tile_set.manifest.bounds.west <= source_bounds.west);
+        assert!(tile_set.manifest.bounds.south <= source_bounds.south);
+        assert!(tile_set.manifest.bounds.east >= source_bounds.east);
+        assert!(tile_set.manifest.bounds.north >= source_bounds.north);
         assert!(tile_set.plan.tile_count > 0);
         assert!(tile_set.plan.tile_count < plan_tile_count_for_config_bounds(&config));
     }
@@ -578,29 +713,31 @@ mod tests {
         let in_flight = Arc::new(AtomicUsize::new(0));
         let max_in_flight = Arc::new(AtomicUsize::new(0));
 
-        let tiles = generate_tiles_for_plan_with_renderer(source_bounds, raster_shape, &plan, 2, {
-            let in_flight = Arc::clone(&in_flight);
-            let max_in_flight = Arc::clone(&max_in_flight);
-
-            move |coord, _window| {
+        let tiles =
+            generate_tiles_for_plan_with_renderer(source_bounds, raster_shape, 2, &plan, 2, {
                 let in_flight = Arc::clone(&in_flight);
                 let max_in_flight = Arc::clone(&max_in_flight);
 
-                async move {
-                    let current = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
-                    max_in_flight.fetch_max(current, Ordering::SeqCst);
-                    tokio::task::yield_now().await;
-                    in_flight.fetch_sub(1, Ordering::SeqCst);
+                move |coord, _window| {
+                    let in_flight = Arc::clone(&in_flight);
+                    let max_in_flight = Arc::clone(&max_in_flight);
 
-                    Ok(RenderedTile {
-                        coord,
-                        png_bytes: vec![coord.x as u8, coord.y as u8],
-                    })
+                    async move {
+                        let current = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                        max_in_flight.fetch_max(current, Ordering::SeqCst);
+                        tokio::task::yield_now().await;
+                        in_flight.fetch_sub(1, Ordering::SeqCst);
+
+                        Ok(RenderedTile {
+                            coord,
+                            png_bytes: vec![coord.x as u8, coord.y as u8],
+                            renderable_pixel_count: 1,
+                        })
+                    }
                 }
-            }
-        })
-        .await
-        .unwrap();
+            })
+            .await
+            .unwrap();
 
         assert!(max_in_flight.load(Ordering::SeqCst) <= 2);
         assert_eq!(

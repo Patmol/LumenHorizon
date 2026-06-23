@@ -4,7 +4,7 @@ use crate::{
     config::AppConfig,
     manifest::{SourceGranule, TileManifest, TileManifestInput},
     publish::RenderedTile,
-    render::{render_png_tile, RenderError, RenderPixel},
+    render::{render_png_tile, renderable_pixel_count, RenderError, RenderPixel},
     tiles::{GeographicBounds, TileCoord, TileRange},
 };
 
@@ -27,8 +27,13 @@ pub fn generate_synthetic_tile_set(
                 let pixels = synthetic_pixels_for_coord(tile_size, coord)?;
                 let png_bytes = render_png_tile(tile_size, &pixels)
                     .map_err(|source| GenerateError::RenderTile { coord, source })?;
+                let renderable_pixel_count = renderable_pixel_count(&pixels);
 
-                tiles.push(RenderedTile { coord, png_bytes });
+                tiles.push(RenderedTile {
+                    coord,
+                    png_bytes,
+                    renderable_pixel_count,
+                });
             }
         }
     }
@@ -121,6 +126,7 @@ pub fn generate_synthetic_tiles(
         rendered_tiles.push(RenderedTile {
             coord: input.coord,
             png_bytes,
+            renderable_pixel_count: renderable_pixel_count(&input.pixels),
         });
     }
 
