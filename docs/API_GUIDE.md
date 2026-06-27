@@ -98,7 +98,15 @@ Readiness reports gateway configuration, auth configuration, rate-limit store re
 curl --fail "$LUMENHORIZON_API_URL/api/v1/tiles/manifest"
 ```
 
-Returns the latest published tile manifest from the processed tiles container. If tile storage is not configured or no latest manifest exists, the route returns a sanitized unavailable or not-found error.
+Returns the public latest published tile manifest from the processed tiles container. Public latest is intended to point at a deliberate product/date mosaic, not an individual processed granule. If tile storage is not configured or no latest manifest exists, the route returns a sanitized unavailable or not-found error.
+
+Product-scoped latest manifests are also available once a mosaic has been published for that product:
+
+```bash
+curl --fail "$LUMENHORIZON_API_URL/api/v1/tiles/manifest?product=VNP46A2"
+```
+
+Mosaic manifests may include a `coverage` object with expected, present, and missing VIIRS h/v tiles for the configured tile bounds. Public latest promotion is blocked for incomplete coverage unless an operator explicitly overrides it during publication.
 
 ### Tile Manifest By ID
 
@@ -112,7 +120,7 @@ curl --fail "$LUMENHORIZON_API_URL/api/v1/tiles/manifest/<tile-set-id>"
 curl --fail "$LUMENHORIZON_API_URL/api/v1/tiles/sets?limit=20"
 ```
 
-List responses include `next_cursor` in `meta` when another page exists. Cursors are opaque.
+List responses include `next_cursor` in `meta` when another page exists. Cursors are opaque. Tile-set rows include publication metadata such as `product`, `cadence`, `tile_set_kind`, `latest`, and `product_latest`; per-granule tile sets are immutable intermediates, while mosaic tile sets can be promoted as product/public latest.
 
 ### Tile Redirect
 

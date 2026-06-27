@@ -1,3 +1,5 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -26,6 +28,25 @@ pub struct TileRange {
     pub max_x: u32,
     pub min_y: u32,
     pub max_y: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ViirsTileCoord {
+    pub tile_h: i16,
+    pub tile_v: i16,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ViirsCoverageSummary {
+    pub expected_tile_count: usize,
+    pub present_tile_count: usize,
+    pub coverage_fraction: f64,
+    pub complete: bool,
+    pub expected_tiles: Vec<ViirsTileCoord>,
+    pub present_tiles: Vec<ViirsTileCoord>,
+    pub missing_tiles: Vec<ViirsTileCoord>,
+    pub missing_columns: Vec<i16>,
+    pub missing_rows: Vec<i16>,
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -143,14 +164,121 @@ pub fn viirs_tile_bounds(tile_h: i16, tile_v: i16) -> Result<GeographicBounds, T
     })
 }
 
+pub fn viirs_tile_overlaps_bounds(
+    tile_h: i16,
+    tile_v: i16,
+    bounds: GeographicBounds,
+) -> Result<bool, TileMathError> {
+    validate_geographic_bounds(bounds)?;
+    let tile_bounds = viirs_tile_bounds(tile_h, tile_v)?;
+
+    Ok(clip_bounds(tile_bounds, bounds).is_some())
+}
+
+pub fn viirs_tiles_for_bounds(
+    bounds: GeographicBounds,
+) -> Result<Vec<ViirsTileCoord>, TileMathError> {
+    validate_geographic_bounds(bounds)?;
+
+    let mut tiles = Vec::new();
+    for tile_h in 0..=35 {
+        for tile_v in 0..=17 {
+            if viirs_tile_overlaps_bounds(tile_h, tile_v, bounds)? {
+                tiles.push(ViirsTileCoord { tile_h, tile_v });
+            }
+        }
+    }
+
+    Ok(tiles)
+}
+
+pub fn summarize_viirs_coverage<I, J>(expected_tiles: I, present_tiles: J) -> ViirsCoverageSummary
+where
+    I: IntoIterator<Item = ViirsTileCoord>,
+    J: IntoIterator<Item = ViirsTileCoord>,
+{
+    let expected = expected_tiles.into_iter().collect::<BTreeSet<_>>();
+    let present = present_tiles
+        .into_iter()
+        .filter(|coord| expected.contains(coord))
+        .collect::<BTreeSet<_>>();
+    let missing = expected.difference(&present).copied().collect::<Vec<_>>();
+    let missing_set = missing.iter().copied().collect::<BTreeSet<_>>();
+
+    let expected_by_column = group_by_column(&expected);
+    let expected_by_row = group_by_row(&expected);
+    let missing_columns = expected_by_column
+        .iter()
+        .filter_map(|(tile_h, column_tiles)| {
+            column_tiles
+                .iter()
+                .all(|coord| missing_set.contains(coord))
+                .then_some(*tile_h)
+        })
+        .collect::<Vec<_>>();
+    let missing_rows = expected_by_row
+        .iter()
+        .filter_map(|(tile_v, row_tiles)| {
+            row_tiles
+                .iter()
+                .all(|coord| missing_set.contains(coord))
+                .then_some(*tile_v)
+        })
+        .collect::<Vec<_>>();
+
+    let expected_tile_count = expected.len();
+    let present_tile_count = present.len();
+    let coverage_fraction = if expected_tile_count == 0 {
+        1.0
+    } else {
+        present_tile_count as f64 / expected_tile_count as f64
+    };
+
+    ViirsCoverageSummary {
+        expected_tile_count,
+        present_tile_count,
+        coverage_fraction,
+        complete: missing.is_empty(),
+        expected_tiles: expected.into_iter().collect(),
+        present_tiles: present.into_iter().collect(),
+        missing_tiles: missing,
+        missing_columns,
+        missing_rows,
+    }
+}
+
+fn group_by_column(coords: &BTreeSet<ViirsTileCoord>) -> BTreeMap<i16, Vec<ViirsTileCoord>> {
+    let mut grouped = BTreeMap::new();
+    for coord in coords {
+        grouped
+            .entry(coord.tile_h)
+            .or_insert_with(Vec::new)
+            .push(*coord);
+    }
+
+    grouped
+}
+
+fn group_by_row(coords: &BTreeSet<ViirsTileCoord>) -> BTreeMap<i16, Vec<ViirsTileCoord>> {
+    let mut grouped = BTreeMap::new();
+    for coord in coords {
+        grouped
+            .entry(coord.tile_v)
+            .or_insert_with(Vec::new)
+            .push(*coord);
+    }
+
+    grouped
+}
+
 pub fn tile_range_for_bounds(bounds: GeographicBounds, z: u8) -> Result<TileRange, TileMathError> {
     validate_bounds(bounds)?;
     let tiles_per_axis = tiles_per_axis(z)?;
 
     let min_x = longitude_to_tile_x(bounds.west, tiles_per_axis);
-    let max_x = longitude_to_tile_x(bounds.east, tiles_per_axis);
+    let max_x = longitude_to_max_tile_x(bounds.east, tiles_per_axis);
     let min_y = latitude_to_tile_y(bounds.north, tiles_per_axis);
-    let max_y = latitude_to_tile_y(bounds.south, tiles_per_axis);
+    let max_y = latitude_to_max_tile_y(bounds.south, tiles_per_axis);
 
     Ok(TileRange {
         z,
@@ -194,18 +322,47 @@ fn tile_y_to_latitude(y: u32, tiles_per_axis: f64) -> f64 {
 }
 
 fn longitude_to_tile_x(longitude: f64, tiles_per_axis: u32) -> u32 {
-    let normalized = ((longitude + 180.0) / 360.0).clamp(0.0, 1.0);
-    ((normalized * f64::from(tiles_per_axis)).floor() as u32).min(tiles_per_axis - 1)
+    scaled_longitude(longitude, tiles_per_axis)
+        .floor()
+        .min(f64::from(tiles_per_axis - 1)) as u32
+}
+
+fn longitude_to_max_tile_x(longitude: f64, tiles_per_axis: u32) -> u32 {
+    exclusive_upper_tile_index(scaled_longitude(longitude, tiles_per_axis), tiles_per_axis)
 }
 
 fn latitude_to_tile_y(latitude: f64, tiles_per_axis: u32) -> u32 {
+    scaled_latitude(latitude, tiles_per_axis)
+        .floor()
+        .min(f64::from(tiles_per_axis - 1)) as u32
+}
+
+fn latitude_to_max_tile_y(latitude: f64, tiles_per_axis: u32) -> u32 {
+    exclusive_upper_tile_index(scaled_latitude(latitude, tiles_per_axis), tiles_per_axis)
+}
+
+fn scaled_longitude(longitude: f64, tiles_per_axis: u32) -> f64 {
+    let normalized = ((longitude + 180.0) / 360.0).clamp(0.0, 1.0);
+
+    normalized * f64::from(tiles_per_axis)
+}
+
+fn scaled_latitude(latitude: f64, tiles_per_axis: u32) -> f64 {
     let latitude = latitude.clamp(-WEB_MERCATOR_LATITUDE_LIMIT, WEB_MERCATOR_LATITUDE_LIMIT);
     let latitude_radians = latitude.to_radians();
     let normalized = (1.0
         - (latitude_radians.tan() + (1.0 / latitude_radians.cos())).ln() / std::f64::consts::PI)
         / 2.0;
 
-    ((normalized * f64::from(tiles_per_axis)).floor() as u32).min(tiles_per_axis - 1)
+    normalized * f64::from(tiles_per_axis)
+}
+
+fn exclusive_upper_tile_index(scaled_coordinate: f64, tiles_per_axis: u32) -> u32 {
+    if scaled_coordinate <= 0.0 {
+        0
+    } else {
+        ((scaled_coordinate.ceil() as u32).saturating_sub(1)).min(tiles_per_axis - 1)
+    }
 }
 
 fn validate_bounds(bounds: GeographicBounds) -> Result<(), TileMathError> {
@@ -214,6 +371,20 @@ fn validate_bounds(bounds: GeographicBounds) -> Result<(), TileMathError> {
     let valid_latitude = (-WEB_MERCATOR_LATITUDE_LIMIT..=WEB_MERCATOR_LATITUDE_LIMIT)
         .contains(&bounds.south)
         && (-WEB_MERCATOR_LATITUDE_LIMIT..=WEB_MERCATOR_LATITUDE_LIMIT).contains(&bounds.north);
+
+    if valid_longitude && valid_latitude && bounds.west < bounds.east && bounds.south < bounds.north
+    {
+        Ok(())
+    } else {
+        Err(TileMathError::InvalidBounds)
+    }
+}
+
+fn validate_geographic_bounds(bounds: GeographicBounds) -> Result<(), TileMathError> {
+    let valid_longitude =
+        (-180.0..=180.0).contains(&bounds.west) && (-180.0..=180.0).contains(&bounds.east);
+    let valid_latitude =
+        (-90.0..=90.0).contains(&bounds.south) && (-90.0..=90.0).contains(&bounds.north);
 
     if valid_longitude && valid_latitude && bounds.west < bounds.east && bounds.south < bounds.north
     {
@@ -313,6 +484,169 @@ mod tests {
                 south: 20.0,
                 east: -120.0,
                 north: 30.0,
+            }
+        );
+    }
+
+    #[test]
+    fn detects_viirs_tile_overlap_against_bounds() {
+        let conus = GeographicBounds {
+            west: -125.0,
+            south: 24.0,
+            east: -66.0,
+            north: 50.0,
+        };
+
+        assert!(viirs_tile_overlaps_bounds(5, 6, conus).unwrap());
+        assert!(viirs_tile_overlaps_bounds(8, 4, conus).unwrap());
+        assert!(!viirs_tile_overlaps_bounds(6, 3, conus).unwrap());
+    }
+
+    #[test]
+    fn computes_expected_viirs_tiles_for_conus_bounds() {
+        let tiles = viirs_tiles_for_bounds(GeographicBounds {
+            west: -125.0,
+            south: 24.0,
+            east: -66.0,
+            north: 50.0,
+        })
+        .unwrap();
+
+        let expected = (5..=11)
+            .flat_map(|tile_h| (4..=6).map(move |tile_v| ViirsTileCoord { tile_h, tile_v }))
+            .collect::<Vec<_>>();
+
+        assert_eq!(tiles, expected);
+    }
+
+    #[test]
+    fn summarizes_missing_viirs_columns_and_tiles() {
+        let expected = (5..=11)
+            .flat_map(|tile_h| (4..=6).map(move |tile_v| ViirsTileCoord { tile_h, tile_v }))
+            .collect::<Vec<_>>();
+        let present = [
+            ViirsTileCoord {
+                tile_h: 6,
+                tile_v: 6,
+            },
+            ViirsTileCoord {
+                tile_h: 7,
+                tile_v: 4,
+            },
+            ViirsTileCoord {
+                tile_h: 7,
+                tile_v: 5,
+            },
+            ViirsTileCoord {
+                tile_h: 9,
+                tile_v: 4,
+            },
+            ViirsTileCoord {
+                tile_h: 9,
+                tile_v: 5,
+            },
+            ViirsTileCoord {
+                tile_h: 9,
+                tile_v: 6,
+            },
+            ViirsTileCoord {
+                tile_h: 10,
+                tile_v: 5,
+            },
+            ViirsTileCoord {
+                tile_h: 11,
+                tile_v: 6,
+            },
+            ViirsTileCoord {
+                tile_h: 11,
+                tile_v: 6,
+            },
+            ViirsTileCoord {
+                tile_h: 6,
+                tile_v: 3,
+            },
+        ];
+
+        let summary = summarize_viirs_coverage(expected, present);
+
+        assert_eq!(summary.expected_tile_count, 21);
+        assert_eq!(summary.present_tile_count, 8);
+        assert!(!summary.complete);
+        assert_eq!(summary.missing_columns, vec![5, 8]);
+        assert!(summary.missing_rows.is_empty());
+        assert!(summary.missing_tiles.contains(&ViirsTileCoord {
+            tile_h: 5,
+            tile_v: 4,
+        }));
+        assert!(summary.missing_tiles.contains(&ViirsTileCoord {
+            tile_h: 8,
+            tile_v: 6,
+        }));
+    }
+
+    #[test]
+    fn tile_range_excludes_east_boundary_only_tiles() {
+        let range = tile_range_for_bounds(
+            GeographicBounds {
+                west: -100.0,
+                south: 20.0,
+                east: -90.0,
+                north: 30.0,
+            },
+            3,
+        )
+        .unwrap();
+
+        assert_eq!(
+            range,
+            TileRange {
+                z: 3,
+                min_x: 1,
+                max_x: 1,
+                min_y: 3,
+                max_y: 3,
+            }
+        );
+    }
+
+    #[test]
+    fn tile_range_excludes_south_boundary_only_tiles() {
+        let tile = tile_bounds(TileCoord { z: 3, x: 2, y: 3 }).unwrap();
+        let range = tile_range_for_bounds(tile, 3).unwrap();
+
+        assert_eq!(
+            range,
+            TileRange {
+                z: 3,
+                min_x: 2,
+                max_x: 2,
+                min_y: 3,
+                max_y: 3,
+            }
+        );
+    }
+
+    #[test]
+    fn tile_range_keeps_world_east_and_south_edges() {
+        let range = tile_range_for_bounds(
+            GeographicBounds {
+                west: -180.0,
+                south: -WEB_MERCATOR_LATITUDE_LIMIT,
+                east: 180.0,
+                north: WEB_MERCATOR_LATITUDE_LIMIT,
+            },
+            3,
+        )
+        .unwrap();
+
+        assert_eq!(
+            range,
+            TileRange {
+                z: 3,
+                min_x: 0,
+                max_x: 7,
+                min_y: 0,
+                max_y: 7,
             }
         );
     }

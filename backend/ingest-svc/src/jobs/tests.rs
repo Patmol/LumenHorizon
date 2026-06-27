@@ -190,20 +190,22 @@ fn truncates_error_messages_on_character_boundaries() {
 
 #[test]
 fn records_granule_processing_outcomes_in_summary() {
-    let mut summary = IngestSummary::new(5);
+    let mut summary = IngestSummary::new(6);
 
     summary.record_attempt(GranuleProcessingOutcome::Enqueued);
     summary.record_attempt(GranuleProcessingOutcome::RejectedAfterDownloaded);
     summary.record_attempt(GranuleProcessingOutcome::FailedAfterValidated);
     summary.record_attempt(GranuleProcessingOutcome::FailedBeforeDownloaded);
     summary.record_attempt(GranuleProcessingOutcome::Skipped);
+    summary.record_filtered_out_of_bounds();
 
-    assert_eq!(summary.discovered, 5);
+    assert_eq!(summary.discovered, 6);
     assert_eq!(summary.attempted, 5);
     assert_eq!(summary.downloaded, 3);
     assert_eq!(summary.validated, 2);
     assert_eq!(summary.enqueued, 1);
     assert_eq!(summary.rejected, 1);
+    assert_eq!(summary.filtered_out_of_bounds, 1);
     assert_eq!(summary.failed, 2);
     assert_eq!(summary.skipped, 1);
 }

@@ -74,10 +74,14 @@ impl GatewayDatabase {
                 tile_count,
                 manifest_blob_path,
                 latest,
+                product,
+                cadence,
+                tile_set_kind,
+                product_latest,
                 created_at
             FROM tile_sets
             WHERE retention_deleted_at IS NULL
-            ORDER BY latest DESC, dataset_date DESC, created_at DESC, id DESC
+            ORDER BY latest DESC, product_latest DESC, dataset_date DESC, created_at DESC, id DESC
             LIMIT $1 OFFSET $2
             "#,
         )
@@ -243,6 +247,10 @@ pub struct TileSetSummary {
     pub tile_count: i32,
     pub manifest_blob_path: String,
     pub latest: bool,
+    pub product: Option<String>,
+    pub cadence: Option<String>,
+    pub tile_set_kind: String,
+    pub product_latest: bool,
     pub created_at: DateTime<Utc>,
 }
 

@@ -20,6 +20,14 @@ paths:
       summary: Get latest tile manifest
       operationId: getLatestTileManifest
       security: []
+      parameters:
+        - name: product
+          in: query
+          required: false
+          description: Optional VIIRS product for product-scoped latest mosaic lookup.
+          schema:
+            type: string
+            enum: [VNP46A2, VJ146A2, VNP46A3]
       responses:
         '200':
           $ref: '#/components/responses/TileManifest'
@@ -617,6 +625,90 @@ components:
         bounds:
           $ref: '#/components/schemas/Bounds'
         tile_url_template:
+          type: string
+        tile_count:
+          type: integer
+          minimum: 0
+        source_granules:
+          type: array
+          items:
+            $ref: '#/components/schemas/SourceGranule'
+        coverage:
+          $ref: '#/components/schemas/TileCoverage'
+        checksums:
+          $ref: '#/components/schemas/ManifestChecksums'
+    SourceGranule:
+      type: object
+      required: [ingest_id, product, blob_path]
+      additionalProperties: false
+      properties:
+        ingest_id:
+          type: string
+          format: uuid
+        product:
+          type: string
+        blob_path:
+          type: string
+    TileCoverage:
+      type: object
+      required: [expected_tile_count, present_tile_count, coverage_fraction, complete, expected_tiles, present_tiles, missing_tiles, missing_columns, missing_rows]
+      additionalProperties: false
+      properties:
+        expected_tile_count:
+          type: integer
+          minimum: 0
+        present_tile_count:
+          type: integer
+          minimum: 0
+        coverage_fraction:
+          type: number
+          minimum: 0
+          maximum: 1
+        complete:
+          type: boolean
+        expected_tiles:
+          type: array
+          items:
+            $ref: '#/components/schemas/ViirsTileCoord'
+        present_tiles:
+          type: array
+          items:
+            $ref: '#/components/schemas/ViirsTileCoord'
+        missing_tiles:
+          type: array
+          items:
+            $ref: '#/components/schemas/ViirsTileCoord'
+        missing_columns:
+          type: array
+          items:
+            type: integer
+            minimum: 0
+            maximum: 35
+        missing_rows:
+          type: array
+          items:
+            type: integer
+            minimum: 0
+            maximum: 17
+    ViirsTileCoord:
+      type: object
+      required: [tile_h, tile_v]
+      additionalProperties: false
+      properties:
+        tile_h:
+          type: integer
+          minimum: 0
+          maximum: 35
+        tile_v:
+          type: integer
+          minimum: 0
+          maximum: 17
+    ManifestChecksums:
+      type: object
+      required: [manifest_sha256]
+      additionalProperties: false
+      properties:
+        manifest_sha256:
           type: string
     Bounds:
       type: object

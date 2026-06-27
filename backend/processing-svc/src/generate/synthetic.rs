@@ -62,6 +62,7 @@ pub fn generate_synthetic_tile_set_with_manifest(
             bounds: GeographicBounds::from(config.tile_bounds),
             tile_count: plan.tile_count,
             source_granules,
+            coverage: None,
         },
     )?;
 

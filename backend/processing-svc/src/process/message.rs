@@ -114,6 +114,46 @@ async fn process_parsed_message_with_workspace(
         processing_log.attempts, processing_log.id
     ));
 
+    let processing_bounds = match processing_bounds_for_message(config, processing_message) {
+        Ok(processing_bounds) => processing_bounds,
+        Err(generate::GenerateError::ConfiguredBoundsOutsideSource {
+            source_bounds,
+            configured_bounds,
+        }) => {
+            let rejection_reason = generate::GenerateError::ConfiguredBoundsOutsideSource {
+                source_bounds,
+                configured_bounds,
+            }
+            .to_string();
+
+            ui::warn(format_args!(
+                "rejecting ingest {}: {}",
+                processing_message.ingest_id, rejection_reason
+            ));
+            db::mark_processing_rejected(&pool, processing_message.ingest_id, &rejection_reason)
+                .await?;
+
+            tracing::info!(
+                command_correlation_id = %correlation_id,
+                ingest_id = %processing_message.ingest_id,
+                processing_log_id = %processing_log.id,
+                source_bounds_west = source_bounds.west,
+                source_bounds_south = source_bounds.south,
+                source_bounds_east = source_bounds.east,
+                source_bounds_north = source_bounds.north,
+                configured_bounds_west = configured_bounds.west,
+                configured_bounds_south = configured_bounds.south,
+                configured_bounds_east = configured_bounds.east,
+                configured_bounds_north = configured_bounds.north,
+                terminal_status = "rejected",
+                "rejected processing message because source bounds do not overlap configured tile bounds"
+            );
+
+            return Ok(());
+        }
+        Err(error) => return Err(ServiceError::from(error)),
+    };
+
     let product = processing_message.product_kind()?;
     let dataset_mapping = science::dataset_mapping_for_product(product);
 
@@ -406,10 +446,6 @@ async fn process_parsed_message_with_workspace(
 
     let tile_set_id = tile_set_id_for_message(config, processing_message, processing_log.attempts);
     let source_granules = vec![source_granule_for_message(processing_message)];
-    let source_bounds = viirs_tile_bounds(processing_message.tile_h, processing_message.tile_v)
-        .map_err(generate::GenerateError::from)?;
-    let configured_bounds = GeographicBounds::from(config.tile_bounds);
-    let generation_bounds = clip_bounds(source_bounds, configured_bounds);
     let processor_version = processor_version();
 
     ui::status(format_args!(
@@ -421,18 +457,18 @@ async fn process_parsed_message_with_workspace(
         ingest_id = %processing_message.ingest_id,
         processing_log_id = %processing_log.id,
         tile_set_id = %tile_set_id,
-        source_bounds_west = source_bounds.west,
-        source_bounds_south = source_bounds.south,
-        source_bounds_east = source_bounds.east,
-        source_bounds_north = source_bounds.north,
-        configured_bounds_west = configured_bounds.west,
-        configured_bounds_south = configured_bounds.south,
-        configured_bounds_east = configured_bounds.east,
-        configured_bounds_north = configured_bounds.north,
-        generation_bounds_west = generation_bounds.map(|bounds| bounds.west),
-        generation_bounds_south = generation_bounds.map(|bounds| bounds.south),
-        generation_bounds_east = generation_bounds.map(|bounds| bounds.east),
-        generation_bounds_north = generation_bounds.map(|bounds| bounds.north),
+        source_bounds_west = processing_bounds.source_bounds.west,
+        source_bounds_south = processing_bounds.source_bounds.south,
+        source_bounds_east = processing_bounds.source_bounds.east,
+        source_bounds_north = processing_bounds.source_bounds.north,
+        configured_bounds_west = processing_bounds.configured_bounds.west,
+        configured_bounds_south = processing_bounds.configured_bounds.south,
+        configured_bounds_east = processing_bounds.configured_bounds.east,
+        configured_bounds_north = processing_bounds.configured_bounds.north,
+        generation_bounds_west = processing_bounds.generation_bounds.west,
+        generation_bounds_south = processing_bounds.generation_bounds.south,
+        generation_bounds_east = processing_bounds.generation_bounds.east,
+        generation_bounds_north = processing_bounds.generation_bounds.north,
         "preparing tile generation for processing message"
     );
 
@@ -445,7 +481,7 @@ async fn process_parsed_message_with_workspace(
             dataset_date: processing_message.granule_date.date_naive(),
             generated_at: Utc::now(),
             processor_version,
-            source_bounds,
+            source_bounds: processing_bounds.source_bounds,
             raster_shape: radiance_shape,
             source_granules,
         })
@@ -456,17 +492,24 @@ async fn process_parsed_message_with_workspace(
         tile_set.manifest.tile_set_id
     ));
 
-    // Publishing writes immutable tile artifacts plus the moving latest pointer.
     ui::status(format_args!(
-        "publishing tile set {} to '{}'",
+        "publishing intermediate tile set {} to '{}'",
         tile_set.manifest.tile_set_id, config.processed_tiles_container
     ));
-    let latest_pointer =
-        publish::publish_generated_tile_set(config, &pool, &blob_client, &tile_set, Utc::now())
-            .await?;
+    let publication = publish::publish_generated_tile_set(
+        config,
+        &pool,
+        &blob_client,
+        &tile_set,
+        publish::PublicationMode::IntermediateGranule {
+            product: processing_message.product.as_str(),
+        },
+        Utc::now(),
+    )
+    .await?;
     ui::success(format_args!(
-        "published tile set {}; latest now points to {}",
-        tile_set.manifest.tile_set_id, latest_pointer.tile_set_id
+        "published intermediate tile set {}; latest pointer unchanged",
+        tile_set.manifest.tile_set_id
     ));
 
     ui::status(format_args!("marking processing row as processed"));
@@ -491,12 +534,41 @@ async fn process_parsed_message_with_workspace(
         valid_pixel_count = quality_summary.valid_pixel_count,
         rejected_pixel_count = quality_summary.rejected_pixel_count,
         manifest_sha256 = tile_set.manifest.checksums.manifest_sha256,
-        latest_manifest_tile_set_id = latest_pointer.tile_set_id,
+        public_latest_promoted = publication.public_latest_pointer.is_some(),
+        product_latest_promoted = publication.product_latest_pointer.is_some(),
         terminal_status = "processed",
-        "generated and published tile set for processing message"
+        "generated and published intermediate tile set for processing message"
     );
 
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ProcessingBounds {
+    source_bounds: GeographicBounds,
+    configured_bounds: GeographicBounds,
+    generation_bounds: GeographicBounds,
+}
+
+fn processing_bounds_for_message(
+    config: &AppConfig,
+    processing_message: &models::ProcessingMessage,
+) -> Result<ProcessingBounds, generate::GenerateError> {
+    let source_bounds = viirs_tile_bounds(processing_message.tile_h, processing_message.tile_v)
+        .map_err(generate::GenerateError::from)?;
+    let configured_bounds = GeographicBounds::from(config.tile_bounds);
+    let generation_bounds = clip_bounds(source_bounds, configured_bounds).ok_or(
+        generate::GenerateError::ConfiguredBoundsOutsideSource {
+            source_bounds,
+            configured_bounds,
+        },
+    )?;
+
+    Ok(ProcessingBounds {
+        source_bounds,
+        configured_bounds,
+        generation_bounds,
+    })
 }
 
 /// Builds a stable tile-set identifier for one processing attempt.
@@ -599,11 +671,86 @@ mod tests {
         .unwrap()
     }
 
+    fn processing_message_for_tile(tile_h: i16, tile_v: i16) -> models::ProcessingMessage {
+        models::ProcessingMessage::new(
+            Uuid::parse_str("00000000-0000-0000-0000-00000000abcd").unwrap(),
+            format!("VNP46A2/2026-05-21/h{tile_h:02}v{tile_v:02}.h5"),
+            "VNP46A2",
+            Utc.with_ymd_and_hms(2026, 5, 21, 0, 0, 0).unwrap(),
+            tile_h,
+            tile_v,
+        )
+        .unwrap()
+    }
+
     #[test]
     fn tile_set_id_is_deterministic_and_attempt_scoped() {
         let id = tile_set_id_for_message(&test_config(), &processing_message(), 2);
 
         assert_eq!(id, "2026-05-21-radiance-dark-sky-v1-00000000-a2");
+    }
+
+    #[test]
+    fn processing_bounds_rejects_boundary_only_source_bounds() {
+        let config = test_config();
+        let message = processing_message_for_tile(6, 3);
+        let error = processing_bounds_for_message(&config, &message).unwrap_err();
+
+        assert!(matches!(
+            error,
+            generate::GenerateError::ConfiguredBoundsOutsideSource {
+                source_bounds,
+                configured_bounds,
+            } if source_bounds == GeographicBounds {
+                west: -120.0,
+                south: 50.0,
+                east: -110.0,
+                north: 60.0,
+            } && configured_bounds == GeographicBounds::from(config.tile_bounds)
+        ));
+    }
+
+    #[test]
+    fn processing_bounds_returns_clipped_generation_bounds_for_overlap() {
+        let bounds = processing_bounds_for_message(&test_config(), &processing_message()).unwrap();
+
+        assert_eq!(
+            bounds,
+            ProcessingBounds {
+                source_bounds: GeographicBounds {
+                    west: -70.0,
+                    south: 20.0,
+                    east: -60.0,
+                    north: 30.0,
+                },
+                configured_bounds: GeographicBounds {
+                    west: -125.0,
+                    south: 24.0,
+                    east: -66.0,
+                    north: 50.0,
+                },
+                generation_bounds: GeographicBounds {
+                    west: -70.0,
+                    south: 24.0,
+                    east: -66.0,
+                    north: 30.0,
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn processing_bounds_rejects_invalid_viirs_tile_coordinates() {
+        let message = processing_message_for_tile(36, 3);
+        let error = processing_bounds_for_message(&test_config(), &message).unwrap_err();
+
+        assert!(matches!(
+            error,
+            generate::GenerateError::TileMath(crate::tiles::TileMathError::InvalidViirsTile {
+                tile_h: 36,
+                tile_v: 3,
+            })
+        ));
     }
 
     #[test]

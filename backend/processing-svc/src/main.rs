@@ -5,6 +5,7 @@ mod generate;
 mod hdf_cli;
 mod manifest;
 mod models;
+mod mosaic;
 mod process;
 mod publish;
 mod render;
@@ -142,6 +143,7 @@ enum ServiceError {
     Database(db::DbError),
     Generate(generate::GenerateError),
     HdfCli(hdf_cli::HdfCliError),
+    Mosaic(mosaic::MosaicError),
     Observability(shared::observability::TracingInitError),
     ProcessingMessage(models::ProcessingMessageError),
     Publish(publish::PublishError),
@@ -158,6 +160,7 @@ impl fmt::Display for ServiceError {
             Self::Database(error) => write!(formatter, "{error}"),
             Self::Generate(error) => write!(formatter, "{error}"),
             Self::HdfCli(error) => write!(formatter, "{error}"),
+            Self::Mosaic(error) => write!(formatter, "{error}"),
             Self::Observability(error) => write!(formatter, "{error}"),
             Self::ProcessingMessage(error) => write!(formatter, "{error}"),
             Self::Publish(error) => write!(formatter, "{error}"),
@@ -203,6 +206,12 @@ impl From<hdf_cli::HdfCliError> for ServiceError {
 impl From<models::ProcessingMessageError> for ServiceError {
     fn from(error: models::ProcessingMessageError) -> Self {
         Self::ProcessingMessage(error)
+    }
+}
+
+impl From<mosaic::MosaicError> for ServiceError {
+    fn from(error: mosaic::MosaicError) -> Self {
+        Self::Mosaic(error)
     }
 }
 

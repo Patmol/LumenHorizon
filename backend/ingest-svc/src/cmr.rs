@@ -6,7 +6,9 @@ use serde::Deserialize;
 use url::Url;
 
 use crate::{
-    clients::{build_http_client, send_with_retry, RetryContext, RetryIdempotency},
+    clients::{
+        build_http_client, is_retryable_status, retry_async, RetryContext, RetryIdempotency,
+    },
     config::AppConfig,
     models::{GranuleCandidate, TileCoordinate},
 };
@@ -116,6 +118,29 @@ impl CmrClient {
         product: &str,
         url: Url,
     ) -> Result<CmrGranulesResponse, CmrError> {
+        retry_async(
+            config.http_retry,
+            RetryContext {
+                dependency: "cmr",
+                operation: "granule_page_fetch",
+                idempotency: RetryIdempotency::Idempotent,
+            },
+            || {
+                let url = url.clone();
+
+                async move { self.request_product_page_once(config, product, url).await }
+            },
+            CmrError::is_retryable,
+        )
+        .await
+    }
+
+    async fn request_product_page_once(
+        &self,
+        config: &AppConfig,
+        product: &str,
+        url: Url,
+    ) -> Result<CmrGranulesResponse, CmrError> {
         let mut request = self.http.get(url);
         if let Some(token) = config
             .earthdata_bearer_token
@@ -125,17 +150,7 @@ impl CmrClient {
             request = request.bearer_auth(token);
         }
 
-        let response = send_with_retry(
-            request,
-            config.http_retry,
-            RetryContext {
-                dependency: "cmr",
-                operation: "granule_page_request",
-                idempotency: RetryIdempotency::Idempotent,
-            },
-        )
-        .await
-        .map_err(CmrError::Request)?;
+        let response = request.send().await.map_err(CmrError::Request)?;
         let status = response.status();
 
         if !status.is_success() {
@@ -326,15 +341,38 @@ pub enum CmrError {
     Url(url::ParseError),
 }
 
+impl CmrError {
+    fn is_retryable(&self) -> bool {
+        match self {
+            Self::Decode(error) => error.is_timeout() || error.is_body() || error.is_decode(),
+            Self::Request(error) => error.is_timeout() || error.is_connect(),
+            Self::Status { status, .. } => is_retryable_status(*status),
+            Self::BuildClient(_) | Self::Url(_) => false,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    use axum::{
+        http::{header::CONTENT_TYPE, StatusCode},
+        response::IntoResponse,
+        routing::get,
+        Router,
+    };
     use chrono::{TimeZone, Utc};
 
     use crate::config::AppConfig;
 
     use super::{
         append_page_discovery, discovery_url, empty_product_discovery, parse_product_response,
-        should_fetch_next_page, CmrGranulesResponse, CMR_DATA_LINK_REL, DEFAULT_TEMPORAL_START,
+        should_fetch_next_page, CmrClient, CmrGranulesResponse, CMR_DATA_LINK_REL,
+        DEFAULT_TEMPORAL_START,
     };
 
     const TEST_STORAGE_ACCESS_KEY: &str = "dGVzdC1zdG9yYWdlLWFjY291bnQta2V5";
@@ -349,10 +387,82 @@ mod tests {
         .expect("test configuration should be valid")
     }
 
+    fn fast_retry_config() -> AppConfig {
+        AppConfig::from_lookup(|name| match name {
+            "DATABASE_URL" => Some("postgres://localhost/lumenhorizon".to_owned()),
+            "AZURE_STORAGE_ACCOUNT" => Some("devstoreaccount1".to_owned()),
+            "AZURE_STORAGE_ACCESS_KEY" => Some(TEST_STORAGE_ACCESS_KEY.to_owned()),
+            "HTTP_RETRY_MAX_ATTEMPTS" => Some("2".to_owned()),
+            "HTTP_RETRY_BASE_DELAY_MS" => Some("1".to_owned()),
+            "HTTP_RETRY_MAX_DELAY_MS" => Some("1".to_owned()),
+            _ => None,
+        })
+        .expect("test configuration should be valid")
+    }
+
     fn query_param(url: &url::Url, name: &str) -> Option<String> {
         url.query_pairs()
             .find(|(key, _)| key == name)
             .map(|(_, value)| value.into_owned())
+    }
+
+    #[tokio::test]
+    async fn retries_cmr_page_decode_failure() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let app_attempts = Arc::clone(&attempts);
+        let valid_body = Arc::new(
+            serde_json::json!({
+                "feed": {
+                    "entry": [{
+                        "title": "VNP46A2.A2024142.h11v06.002.2024143000000.h5",
+                        "producer_granule_id": "VNP46A2.A2024142.h11v06.002.2024143000000.h5",
+                        "time_start": "2024-05-21T00:00:00Z",
+                        "links": [{
+                            "rel": CMR_DATA_LINK_REL,
+                            "href": "https://archive.example.test/VNP46A2.A2024142.h11v06.002.2024143000000.h5"
+                        }]
+                    }]
+                }
+            })
+            .to_string(),
+        );
+        let app_valid_body = Arc::clone(&valid_body);
+        let app = Router::new().route(
+            "/granules.json",
+            get(move || {
+                let app_attempts = Arc::clone(&app_attempts);
+                let app_valid_body = Arc::clone(&app_valid_body);
+
+                async move {
+                    let attempt = app_attempts.fetch_add(1, Ordering::SeqCst);
+                    let body = if attempt == 0 {
+                        "{".to_owned()
+                    } else {
+                        (*app_valid_body).clone()
+                    };
+
+                    (StatusCode::OK, [(CONTENT_TYPE, "application/json")], body).into_response()
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let config = fast_retry_config();
+        let client = CmrClient::new(&config).unwrap();
+
+        let response = client
+            .request_product_page(
+                &config,
+                "VNP46A2",
+                url::Url::parse(&format!("{}://{addr}/granules.json", "http")).unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.entry_count(), 1);
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        server.abort();
     }
 
     #[test]

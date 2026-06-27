@@ -6,6 +6,7 @@ pub struct IngestSummary {
     pub validated: usize,
     pub enqueued: usize,
     pub rejected: usize,
+    pub filtered_out_of_bounds: usize,
     pub failed: usize,
     pub skipped: usize,
 }
@@ -19,9 +20,14 @@ impl IngestSummary {
             validated: 0,
             enqueued: 0,
             rejected: 0,
+            filtered_out_of_bounds: 0,
             failed: 0,
             skipped: 0,
         }
+    }
+
+    pub(super) fn record_filtered_out_of_bounds(&mut self) {
+        self.filtered_out_of_bounds += 1;
     }
 
     pub(super) fn record_attempt(&mut self, outcome: GranuleProcessingOutcome) {

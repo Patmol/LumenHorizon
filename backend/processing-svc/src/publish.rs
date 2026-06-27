@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use shared::processing_message::{product_definition, ProductCadence};
 use sqlx::PgPool;
 use thiserror::Error;
 
@@ -14,6 +15,52 @@ use crate::{
 
 const JSON_CONTENT_TYPE: &str = "application/json";
 const PNG_CONTENT_TYPE: &str = "image/png";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublicationMode<'a> {
+    IntermediateGranule {
+        product: &'a str,
+    },
+    ProductMosaic {
+        product: &'a str,
+        promote_public_latest: bool,
+    },
+}
+
+impl<'a> PublicationMode<'a> {
+    fn product(self) -> &'a str {
+        match self {
+            Self::IntermediateGranule { product } | Self::ProductMosaic { product, .. } => product,
+        }
+    }
+
+    fn tile_set_kind(self) -> db::TileSetKind {
+        match self {
+            Self::IntermediateGranule { .. } => db::TileSetKind::Granule,
+            Self::ProductMosaic { .. } => db::TileSetKind::Mosaic,
+        }
+    }
+
+    fn promotes_product_latest(self) -> bool {
+        matches!(self, Self::ProductMosaic { .. })
+    }
+
+    fn promotes_public_latest(self) -> bool {
+        matches!(
+            self,
+            Self::ProductMosaic {
+                promote_public_latest: true,
+                ..
+            }
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublishTileSetOutcome {
+    pub public_latest_pointer: Option<LatestManifestPointer>,
+    pub product_latest_pointer: Option<LatestManifestPointer>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderedTile {
@@ -41,6 +88,9 @@ pub enum PublishError {
 
     #[error(transparent)]
     TileMath(#[from] TileMathError),
+
+    #[error("unsupported tile publication product '{product}'")]
+    UnsupportedProduct { product: String },
 }
 
 pub async fn publish_generated_tile_set(
@@ -48,15 +98,17 @@ pub async fn publish_generated_tile_set(
     pool: &PgPool,
     blob_client: &BlobStorageClient,
     tile_set: &GeneratedTileSet,
-    promoted_at: DateTime<Utc>,
-) -> Result<LatestManifestPointer, PublishError> {
+    mode: PublicationMode<'_>,
+    published_at: DateTime<Utc>,
+) -> Result<PublishTileSetOutcome, PublishError> {
     publish_tile_set(
         config,
         pool,
         blob_client,
         &tile_set.manifest,
         &tile_set.tiles,
-        promoted_at,
+        mode,
+        published_at,
     )
     .await
 }
@@ -67,8 +119,9 @@ pub async fn publish_tile_set(
     blob_client: &BlobStorageClient,
     manifest: &TileManifest,
     tiles: &[RenderedTile],
-    promoted_at: DateTime<Utc>,
-) -> Result<LatestManifestPointer, PublishError> {
+    mode: PublicationMode<'_>,
+    published_at: DateTime<Utc>,
+) -> Result<PublishTileSetOutcome, PublishError> {
     ui::status(format_args!(
         "uploading {} tile blob(s) for {}",
         tiles.len(),
@@ -94,7 +147,7 @@ pub async fn publish_tile_set(
     }
     progress.finish(format!("uploaded {} tile blob(s)", tiles.len()));
 
-    publish_tile_manifest(config, pool, blob_client, manifest, promoted_at).await
+    publish_tile_manifest(config, pool, blob_client, manifest, mode, published_at).await
 }
 
 pub async fn publish_tile_manifest(
@@ -102,10 +155,13 @@ pub async fn publish_tile_manifest(
     pool: &PgPool,
     blob_client: &BlobStorageClient,
     manifest: &TileManifest,
-    promoted_at: DateTime<Utc>,
-) -> Result<LatestManifestPointer, PublishError> {
+    mode: PublicationMode<'_>,
+    published_at: DateTime<Utc>,
+) -> Result<PublishTileSetOutcome, PublishError> {
     let manifest_json = manifest.to_pretty_json()?;
     let manifest_blob_path = manifest.manifest_blob_path()?;
+    let product = mode.product();
+    let cadence = product_cadence(product)?;
 
     ui::status(format_args!("uploading manifest {}", manifest_blob_path));
     blob_client
@@ -122,31 +178,99 @@ pub async fn publish_tile_manifest(
         "recording tile set {} in PostgreSQL",
         manifest.tile_set_id
     ));
-    db::insert_tile_set(pool, manifest).await?;
-    ui::status(format_args!(
-        "promoting {} as latest tile set",
-        manifest.tile_set_id
-    ));
-    db::promote_latest_tile_set(pool, &manifest.tile_set_id).await?;
+    db::insert_tile_set_with_metadata(
+        pool,
+        db::TileSetInsert {
+            manifest,
+            product: Some(product),
+            cadence: Some(cadence),
+            kind: mode.tile_set_kind(),
+        },
+    )
+    .await?;
 
-    let latest_pointer = manifest.latest_pointer(promoted_at)?;
+    let product_latest_pointer = if mode.promotes_product_latest() {
+        ui::status(format_args!(
+            "promoting {} as latest {} tile set",
+            manifest.tile_set_id, product
+        ));
+        db::promote_product_latest_tile_set(pool, &manifest.tile_set_id).await?;
+
+        let latest_pointer = manifest.latest_pointer(published_at)?;
+        upload_latest_pointer(
+            config,
+            blob_client,
+            &product_latest_manifest_blob_path(product),
+            &latest_pointer,
+        )
+        .await?;
+
+        Some(latest_pointer)
+    } else {
+        None
+    };
+
+    let public_latest_pointer = if mode.promotes_public_latest() {
+        ui::status(format_args!(
+            "promoting {} as public latest tile set",
+            manifest.tile_set_id
+        ));
+        db::promote_latest_tile_set(pool, &manifest.tile_set_id).await?;
+
+        let latest_pointer = manifest.latest_pointer(published_at)?;
+        upload_latest_pointer(
+            config,
+            blob_client,
+            LatestManifestPointer::blob_path(),
+            &latest_pointer,
+        )
+        .await?;
+
+        Some(latest_pointer)
+    } else {
+        None
+    };
+
+    Ok(PublishTileSetOutcome {
+        public_latest_pointer,
+        product_latest_pointer,
+    })
+}
+
+async fn upload_latest_pointer(
+    config: &AppConfig,
+    blob_client: &BlobStorageClient,
+    blob_path: &str,
+    latest_pointer: &LatestManifestPointer,
+) -> Result<(), PublishError> {
     let latest_json = latest_pointer.to_pretty_json()?;
 
     ui::status(format_args!(
-        "uploading latest manifest pointer {}",
-        LatestManifestPointer::blob_path()
+        "uploading latest manifest pointer {blob_path}"
     ));
     blob_client
         .upload_processed_blob(
             &config.processed_tiles_container,
-            LatestManifestPointer::blob_path(),
+            blob_path,
             latest_json.as_bytes(),
             JSON_CONTENT_TYPE,
             &config.tile_latest_cache_control,
         )
         .await?;
 
-    Ok(latest_pointer)
+    Ok(())
+}
+
+fn product_cadence(product: &str) -> Result<ProductCadence, PublishError> {
+    product_definition(product)
+        .map(|definition| definition.cadence)
+        .ok_or_else(|| PublishError::UnsupportedProduct {
+            product: product.to_owned(),
+        })
+}
+
+fn product_latest_manifest_blob_path(product: &str) -> String {
+    format!("manifests/latest/{product}.json")
 }
 
 #[cfg(test)]
@@ -204,6 +328,7 @@ mod tests {
                 },
                 tile_count: 1,
                 source_granules: Vec::new(),
+                coverage: None,
             },
         )
         .unwrap();
@@ -264,6 +389,7 @@ mod tests {
                 },
                 tile_count: 2,
                 source_granules: Vec::new(),
+                coverage: None,
             },
         )
         .unwrap();
@@ -306,5 +432,27 @@ mod tests {
             manifest.checksums.manifest_sha256
         );
         assert_eq!(manifest.tile_count as usize, tiles.len());
+    }
+
+    #[test]
+    fn publication_modes_expose_latest_promotion_intent() {
+        let intermediate = PublicationMode::IntermediateGranule { product: "VNP46A2" };
+        let mosaic = PublicationMode::ProductMosaic {
+            product: "VNP46A2",
+            promote_public_latest: true,
+        };
+
+        assert_eq!(intermediate.product(), "VNP46A2");
+        assert_eq!(intermediate.tile_set_kind(), db::TileSetKind::Granule);
+        assert!(!intermediate.promotes_product_latest());
+        assert!(!intermediate.promotes_public_latest());
+        assert_eq!(mosaic.product(), "VNP46A2");
+        assert_eq!(mosaic.tile_set_kind(), db::TileSetKind::Mosaic);
+        assert!(mosaic.promotes_product_latest());
+        assert!(mosaic.promotes_public_latest());
+        assert_eq!(
+            product_latest_manifest_blob_path("VNP46A2"),
+            "manifests/latest/VNP46A2.json"
+        );
     }
 }

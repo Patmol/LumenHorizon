@@ -34,8 +34,7 @@ The current runtime uses Azurite-compatible Blob and Queue REST APIs.
 | `PORT` | no | `8083` | `ingest-svc` listener port. |
 | `EARTHDATA_BEARER_TOKEN` | yes for authenticated downloads | none | NASA Earthdata bearer token. |
 | `CMR_BASE_URL` | no | CMR default | CMR endpoint. |
-| `BOUNDING_BOX` | no | product default | Search bounding box. |
-| `INGEST_MAX_GRANULES` | no | unset | Optional per-run limit. |
+| `BOUNDING_BOX` | no | product default | Search bounding box. Use a narrower value for local smoke tests; ingest does not truncate discovery results. |
 | `INTERNAL_SERVICE_AUTH_TOKEN` | no | unset | Enables internal admin auth on ingest admin routes. |
 | `INTERNAL_SERVICE_AUTH_HEADER` | no | `x-lumenhorizon-internal-token` | Header for internal admin auth. |
 
@@ -63,6 +62,20 @@ The current runtime uses Azurite-compatible Blob and Queue REST APIs.
 | `RETENTION_PROTECTED_PRIOR_TILE_SETS` | no | `2` | Prior non-latest tile sets protected per classification version. |
 | `RETENTION_BATCH_LIMIT` | no | service default | Candidate selection cap per cleanup run. |
 | `RETENTION_TILE_BLOB_LIMIT` | no | `5000` | Max listed blobs under one tile-set prefix before skip. |
+
+After processing multiple accepted granules for one product/date, publish the product mosaic. Omitting the date selects the latest processed date with at least two eligible granule tile sets, which is the form intended for scheduled automation:
+
+```bash
+just publish-mosaic VNP46A2 true
+```
+
+To republish or inspect a specific date, pass it explicitly:
+
+```bash
+just publish-mosaic VNP46A2 2026-05-21 true
+```
+
+The final `true` promotes the mosaic to the public `/api/v1/tiles/manifest` pointer in addition to the product-scoped latest pointer.
 
 ## API Gateway Variables
 

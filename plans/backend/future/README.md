@@ -17,4 +17,5 @@ Suggested feature-plan sections:
 Current future notes:
 
 - [API Gateway JWT Validation Libraries](api-gateway-jwt-validation-libraries.md)
+- [Global Overlay Coverage Scaling](global-overlay-coverage-scaling.md)
 - [Observing Sites And Sky-Quality Scores](observing-sites-and-sky-quality.md)

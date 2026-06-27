@@ -14,8 +14,6 @@ import Foundation
 /// broken tile overlay. The app target converts this into an `MKTileOverlay`;
 /// keeping this type free of MapKit keeps it unit-testable without rendering.
 public struct TileOverlayConfiguration: Equatable, Sendable {
-    private static let webMercatorEquatorialMetersPerPixel = 156_543.03392
-
     /// Overlay identity. Used to decide when a stale overlay must be replaced.
     public let tileSetId: String
 
@@ -36,36 +34,6 @@ public struct TileOverlayConfiguration: Equatable, Sendable {
 
     /// Geographic coverage extent of the tile set.
     public let bounds: TileBounds
-
-    /// Camera zoom limits derived from the manifest zoom band.
-    public var cameraZoomRange: TileOverlayCameraZoomRange? {
-        let centerLatitude = (bounds.south + bounds.north) / 2
-        let latitudeScale = cos(centerLatitude * .pi / 180)
-        guard latitudeScale > 0, latitudeScale.isFinite else {
-            return nil
-        }
-
-        func centerCoordinateDistance(for zoom: Int) -> Double {
-            let zoomScale = pow(2, Double(zoom))
-            let metersPerPixel =
-                Self.webMercatorEquatorialMetersPerPixel * latitudeScale / zoomScale
-            return metersPerPixel * Double(tileSize)
-        }
-
-        let minDistance = centerCoordinateDistance(for: maxDisplayZoom)
-        let maxDistance = centerCoordinateDistance(for: minZoom)
-        guard minDistance.isFinite,
-              maxDistance.isFinite,
-              minDistance > 0,
-              maxDistance >= minDistance else {
-            return nil
-        }
-
-        return TileOverlayCameraZoomRange(
-            minCenterCoordinateDistance: minDistance,
-            maxCenterCoordinateDistance: maxDistance
-        )
-    }
 
     /// Builds a configuration from a manifest, validating everything the
     /// overlay relies on.
@@ -113,15 +81,6 @@ public struct TileOverlayConfiguration: Equatable, Sendable {
             throw TileOverlayConfigurationError.invalidBounds(bounds)
         }
     }
-}
-
-/// MapKit-free camera zoom range derived from a tile manifest.
-public struct TileOverlayCameraZoomRange: Equatable, Sendable {
-    /// Closest allowed camera distance; derived from `max_display_zoom`.
-    public let minCenterCoordinateDistance: Double
-
-    /// Farthest allowed camera distance; derived from `min_zoom`.
-    public let maxCenterCoordinateDistance: Double
 }
 
 /// Reasons a manifest cannot be turned into a renderable tile overlay.

@@ -1,6 +1,8 @@
 use std::time::Duration;
 
-pub(crate) use shared::http_retry::{send_with_retry, RetryContext, RetryIdempotency};
+pub(crate) use shared::http_retry::{
+    is_retryable_status, retry_async, send_with_retry, RetryContext, RetryIdempotency,
+};
 
 const USER_AGENT: &str = "LumenHorizon ingest-svc/0.1";
 

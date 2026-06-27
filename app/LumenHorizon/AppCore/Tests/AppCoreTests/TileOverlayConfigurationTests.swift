@@ -76,59 +76,6 @@ struct TileOverlayConfigurationTests {
             _ = try TileOverlayConfiguration(manifest: manifest)
         }
     }
-
-    @Test("camera zoom range is derived from manifest zooms")
-    func cameraZoomRangeUsesManifestZooms() throws {
-        let manifest = try Fixtures.overlayManifest(
-            tileSize: 256,
-            minZoom: 3,
-            maxNativeZoom: 10,
-            maxDisplayZoom: 12,
-            west: -1,
-            south: -1,
-            east: 1,
-            north: 1
-        )
-        let config = try TileOverlayConfiguration(manifest: manifest)
-
-        let range = try #require(config.cameraZoomRange)
-
-        #expect(abs(range.minCenterCoordinateDistance - 9_783.93962) < 0.001)
-        #expect(abs(range.maxCenterCoordinateDistance - 5_009_377.08544) < 0.001)
-        #expect(range.minCenterCoordinateDistance < range.maxCenterCoordinateDistance)
-    }
-
-    @Test("camera zoom range honors max display zoom")
-    func cameraZoomRangeUsesMaxDisplayZoomForCloseLimit() throws {
-        let nativeOnlyManifest = try Fixtures.overlayManifest(maxNativeZoom: 10, maxDisplayZoom: 10)
-        let upsampledManifest = try Fixtures.overlayManifest(maxNativeZoom: 10, maxDisplayZoom: 12)
-        let nativeOnly = try TileOverlayConfiguration(manifest: nativeOnlyManifest)
-        let upsampled = try TileOverlayConfiguration(manifest: upsampledManifest)
-
-        let nativeOnlyRange = try #require(nativeOnly.cameraZoomRange)
-        let upsampledRange = try #require(upsampled.cameraZoomRange)
-
-        #expect(upsampledRange.minCenterCoordinateDistance < nativeOnlyRange.minCenterCoordinateDistance)
-        #expect(upsampledRange.maxCenterCoordinateDistance == nativeOnlyRange.maxCenterCoordinateDistance)
-    }
-
-    @Test("camera zoom range changes with latitude")
-    func cameraZoomRangeUsesBoundsCenterLatitude() throws {
-        let equatorManifest = try Fixtures.overlayManifest(
-            west: -1, south: -1, east: 1, north: 1
-        )
-        let highLatitudeManifest = try Fixtures.overlayManifest(
-            west: -1, south: 59, east: 1, north: 61
-        )
-        let equator = try TileOverlayConfiguration(manifest: equatorManifest)
-        let highLatitude = try TileOverlayConfiguration(manifest: highLatitudeManifest)
-
-        let equatorRange = try #require(equator.cameraZoomRange)
-        let highLatitudeRange = try #require(highLatitude.cameraZoomRange)
-
-        #expect(highLatitudeRange.minCenterCoordinateDistance < equatorRange.minCenterCoordinateDistance)
-        #expect(highLatitudeRange.maxCenterCoordinateDistance < equatorRange.maxCenterCoordinateDistance)
-    }
 }
 
 @Suite("Map overlay state resolution")

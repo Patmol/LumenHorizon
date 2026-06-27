@@ -408,6 +408,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn latest_manifest_can_select_product_scoped_pointer() {
+        let response = router(test_state_with_storage(
+            FakeTileManifestStorage::with_manifest(sample_manifest("public-latest"))
+                .with_product_manifest("VNP46A2", sample_manifest("daily-latest")),
+        ))
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/tiles/manifest?product=VNP46A2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let value = json_body(response).await;
+        assert_eq!(value["data"]["tile_set_id"], "daily-latest");
+        assert!(value["error"].is_null());
+    }
+
+    #[tokio::test]
+    async fn latest_manifest_rejects_invalid_product_query() {
+        let response = router(test_state_with_storage(
+            FakeTileManifestStorage::with_manifest(sample_manifest("public-latest")),
+        ))
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/tiles/manifest?product=UNKNOWN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let value = json_body(response).await;
+        assert_eq!(value["error"]["code"], "invalid_request");
+        assert_eq!(value["error"]["message"], "invalid product");
+    }
+
+    #[tokio::test]
     async fn immutable_manifest_returns_manifest_with_immutable_cache_header() {
         let response = router(test_state_with_storage(
             FakeTileManifestStorage::with_manifest(sample_manifest("tile-set-1")),
@@ -1043,6 +1086,10 @@ mod tests {
             tile_count: 42,
             manifest_blob_path: format!("manifests/{tile_set_id}.json"),
             latest,
+            product: Some("VNP46A2".to_owned()),
+            cadence: Some("daily".to_owned()),
+            tile_set_kind: "mosaic".to_owned(),
+            product_latest: latest,
             created_at: Utc.with_ymd_and_hms(2026, 5, 21, 9, 15, 0).unwrap(),
         }
     }
@@ -1050,6 +1097,7 @@ mod tests {
     #[derive(Clone)]
     struct FakeTileManifestStorage {
         latest_manifest: Value,
+        product_latest_manifests: HashMap<String, Value>,
         manifests: HashMap<String, Value>,
         delay: Option<Duration>,
     }
@@ -1059,9 +1107,18 @@ mod tests {
             let tile_set_id = manifest["tile_set_id"].as_str().unwrap().to_owned();
             Self {
                 latest_manifest: manifest.clone(),
+                product_latest_manifests: HashMap::new(),
                 manifests: HashMap::from([(tile_set_id, manifest)]),
                 delay: None,
             }
+        }
+
+        fn with_product_manifest(mut self, product: &str, manifest: Value) -> Self {
+            let tile_set_id = manifest["tile_set_id"].as_str().unwrap().to_owned();
+            self.product_latest_manifests
+                .insert(product.to_owned(), manifest.clone());
+            self.manifests.insert(tile_set_id, manifest);
+            self
         }
 
         fn with_delay(mut self, delay: Duration) -> Self {
@@ -1079,6 +1136,25 @@ mod tests {
                     tokio::time::sleep(delay).await;
                 }
                 Ok(manifest)
+            })
+        }
+
+        fn latest_manifest_for_product<'a>(&'a self, product: &'a str) -> StorageFuture<'a, Value> {
+            let delay = self.delay;
+            let result = self
+                .product_latest_manifests
+                .get(product)
+                .cloned()
+                .ok_or_else(|| StorageError::BlobStatus {
+                    blob_path: format!("manifests/latest/{product}.json"),
+                    status: reqwest::StatusCode::NOT_FOUND,
+                    body: "not found".to_owned(),
+                });
+            Box::pin(async move {
+                if let Some(delay) = delay {
+                    tokio::time::sleep(delay).await;
+                }
+                result
             })
         }
 

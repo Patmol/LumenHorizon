@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use shared::{
     dark_sky::{DARK_SKY_CLASSES, DARK_SKY_CLASSIFICATION_VERSION},
-    processing_message::ProcessingMessage,
+    processing_message::{ProcessingMessage, ProcessingProduct},
     slippy_tiles::{
         clip_bounds, tile_bounds, validate_tile_coord, GeographicBounds, TileCoord, TileMathError,
     },
@@ -45,13 +45,24 @@ pub(super) async fn ready(State(state): State<AppState>) -> (StatusCode, Json<Re
 pub(super) async fn latest_tile_manifest(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
+    RawQuery(raw_query): RawQuery,
 ) -> Response {
+    let query = match latest_manifest_query_from_raw_query(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(error) => return error.into_response_with_request_id(request_id.0),
+    };
+
     let Some(storage) = state.tile_manifest_storage.as_ref() else {
         return GatewayError::service_unavailable("tile manifest storage is not configured")
             .into_response_with_request_id(request_id.0);
     };
 
-    match storage.latest_manifest().await {
+    let manifest_result = match query.product.as_deref() {
+        Some(product) => storage.latest_manifest_for_product(product).await,
+        None => storage.latest_manifest().await,
+    };
+
+    match manifest_result {
         Ok(manifest) => {
             let mut headers = HeaderMap::new();
             let cache_control = HeaderValue::from_str(&state.config.tile_latest_cache_control)
@@ -69,6 +80,32 @@ pub(super) async fn latest_tile_manifest(
         }
         Err(error) => manifest_storage_error_response(error, request_id, true),
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LatestManifestQuery {
+    product: Option<String>,
+}
+
+fn latest_manifest_query_from_raw_query(
+    raw_query: Option<&str>,
+) -> Result<LatestManifestQuery, GatewayError> {
+    let mut product = None;
+
+    for (key, value) in url::form_urlencoded::parse(raw_query.unwrap_or_default().as_bytes()) {
+        match key.as_ref() {
+            "product" if product.is_none() => {
+                let value = value.into_owned();
+                ProcessingProduct::parse(&value)
+                    .map_err(|_| GatewayError::invalid_request("invalid product"))?;
+                product = Some(value);
+            }
+            "product" => return Err(GatewayError::invalid_request("duplicate product parameter")),
+            _ => return Err(GatewayError::invalid_request("unsupported query parameter")),
+        }
+    }
+
+    Ok(LatestManifestQuery { product })
 }
 
 pub(super) async fn tile_manifest_by_id(

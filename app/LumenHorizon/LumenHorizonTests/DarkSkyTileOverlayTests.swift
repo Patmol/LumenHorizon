@@ -6,7 +6,9 @@
 //
 
 import AppCore
+import CoreGraphics
 import Foundation
+import ImageIO
 import MapKit
 import Testing
 @testable import LumenHorizon
@@ -63,6 +65,77 @@ private func makeHTTPResponse(
     )
 }
 
+private struct RGBAColor: Equatable {
+    let red: UInt8
+    let green: UInt8
+    let blue: UInt8
+    let alpha: UInt8
+}
+
+private func pngData(
+    width: Int,
+    height: Int,
+    pixels: [RGBAColor]
+) throws -> Data {
+    let bytesPerPixel = 4
+    let bytesPerRow = width * bytesPerPixel
+    var bytes = pixels.flatMap { [$0.red, $0.green, $0.blue, $0.alpha] }
+    let colorSpace = try #require(CGColorSpace(name: CGColorSpace.sRGB))
+    let context = try #require(CGContext(
+        data: &bytes,
+        width: width,
+        height: height,
+        bitsPerComponent: 8,
+        bytesPerRow: bytesPerRow,
+        space: colorSpace,
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    ))
+    let image = try #require(context.makeImage())
+    let data = NSMutableData()
+    let destination = try #require(CGImageDestinationCreateWithData(
+        data,
+        "public.png" as CFString,
+        1,
+        nil
+    ))
+
+    CGImageDestinationAddImage(destination, image, nil)
+    #expect(CGImageDestinationFinalize(destination))
+
+    return data as Data
+}
+
+private func decodedPixels(from data: Data) throws -> [RGBAColor] {
+    let source = try #require(CGImageSourceCreateWithData(data as CFData, nil))
+    let image = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
+    let width = image.width
+    let height = image.height
+    let bytesPerPixel = 4
+    let bytesPerRow = width * bytesPerPixel
+    var bytes = [UInt8](repeating: 0, count: height * bytesPerRow)
+    let colorSpace = try #require(CGColorSpace(name: CGColorSpace.sRGB))
+    let context = try #require(CGContext(
+        data: &bytes,
+        width: width,
+        height: height,
+        bitsPerComponent: 8,
+        bytesPerRow: bytesPerRow,
+        space: colorSpace,
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    ))
+
+    context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+    return stride(from: 0, to: bytes.count, by: bytesPerPixel).map { index in
+        RGBAColor(
+            red: bytes[index],
+            green: bytes[index + 1],
+            blue: bytes[index + 2],
+            alpha: bytes[index + 3]
+        )
+    }
+}
+
 @Suite("Dark sky tile overlay loading")
 @MainActor
 struct DarkSkyTileOverlayTests {
@@ -82,6 +155,110 @@ struct DarkSkyTileOverlayTests {
 
         #expect(result.data == png)
         #expect(result.error == nil)
+    }
+
+    @Test("display zoom is exposed to MapKit for overzoom rendering")
+    func displayZoomIsExposedToMapKit() throws {
+        let overlay = try Self.makeOverlay { _ in
+            throw TileLoaderTestError.unexpectedNetworkCall
+        }
+
+        #expect(overlay.minimumZ == 3)
+        #expect(overlay.maximumZ == 12)
+    }
+
+    @Test("display zoom tile requests fetch native parent tiles")
+    func displayZoomTileRequestsFetchNativeParentTiles() async throws {
+        let png = try pngData(
+            width: 4,
+            height: 4,
+            pixels: Array(repeating: RGBAColor(red: 20, green: 40, blue: 60, alpha: 255), count: 16)
+        )
+        var requestedURL: URL?
+        let overlay = try Self.makeOverlay { request in
+            requestedURL = request.url
+            let response = try #require(makeHTTPResponse(
+                url: request.url,
+                statusCode: 200,
+                contentType: "image/png"
+            ))
+            return (png, response)
+        }
+
+        let result = await Self.loadTile(
+            from: overlay,
+            path: MKTileOverlayPath(x: 19, y: 23, z: 11, contentScaleFactor: 1)
+        )
+
+        #expect(requestedURL?.absoluteString == "https://tiles.lumenhorizon.com/tiles/set/10/9/11.png")
+        #expect(result.data?.isEmpty == false)
+        #expect(result.error == nil)
+    }
+
+    @Test("display zoom tiles crop and upscale the requested child quadrant")
+    func displayZoomTilesCropAndUpscaleChildQuadrant() async throws {
+        let topLeft = RGBAColor(red: 255, green: 0, blue: 0, alpha: 255)
+        let topRight = RGBAColor(red: 0, green: 255, blue: 0, alpha: 255)
+        let bottomLeft = RGBAColor(red: 0, green: 0, blue: 255, alpha: 255)
+        let bottomRight = RGBAColor(red: 255, green: 255, blue: 0, alpha: 255)
+        let png = try pngData(
+            width: 4,
+            height: 4,
+            pixels: [
+                topLeft, topLeft, topRight, topRight,
+                topLeft, topLeft, topRight, topRight,
+                bottomLeft, bottomLeft, bottomRight, bottomRight,
+                bottomLeft, bottomLeft, bottomRight, bottomRight,
+            ]
+        )
+        let overlay = try Self.makeOverlay { request in
+            let response = try #require(makeHTTPResponse(
+                url: request.url,
+                statusCode: 200,
+                contentType: "image/png"
+            ))
+            return (png, response)
+        }
+
+        let result = await Self.loadTile(
+            from: overlay,
+            path: MKTileOverlayPath(x: 19, y: 23, z: 11, contentScaleFactor: 1)
+        )
+        let data = try #require(result.data)
+        let pixels = try decodedPixels(from: data)
+
+        #expect(pixels.allSatisfy { $0 == bottomRight })
+        #expect(result.error == nil)
+    }
+
+    @Test("display zoom child tiles reuse cached native parent bytes")
+    func displayZoomChildTilesReuseCachedNativeParentBytes() async throws {
+        let png = try pngData(
+            width: 4,
+            height: 4,
+            pixels: Array(repeating: RGBAColor(red: 80, green: 90, blue: 100, alpha: 255), count: 16)
+        )
+        var requestCount = 0
+        let overlay = try Self.makeOverlay { request in
+            requestCount += 1
+            let response = try #require(makeHTTPResponse(
+                url: request.url,
+                statusCode: 200,
+                contentType: "image/png"
+            ))
+            return (png, response)
+        }
+
+        _ = await Self.loadTile(
+            from: overlay,
+            path: MKTileOverlayPath(x: 18, y: 22, z: 11, contentScaleFactor: 1)
+        )
+        _ = await Self.loadTile(
+            from: overlay,
+            path: MKTileOverlayPath(x: 19, y: 23, z: 11, contentScaleFactor: 1)
+        )
+
+        #expect(requestCount == 1)
     }
 
     @Test("HTTP 404 returns transparent no-data")
@@ -172,10 +349,11 @@ struct DarkSkyTileOverlayTests {
     }
 
     private static func loadTile(
-        from overlay: DarkSkyTileOverlay
+        from overlay: DarkSkyTileOverlay,
+        path: MKTileOverlayPath = MKTileOverlayPath(x: 9, y: 11, z: 5, contentScaleFactor: 1)
     ) async -> (data: Data?, error: (any Error)?) {
         await withCheckedContinuation { continuation in
-            overlay.loadTile(at: MKTileOverlayPath(x: 9, y: 11, z: 5, contentScaleFactor: 1)) {
+            overlay.loadTile(at: path) {
                 data,
                 error in
                 continuation.resume(returning: (data, error))

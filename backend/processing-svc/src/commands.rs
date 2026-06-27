@@ -1,14 +1,25 @@
 use std::fmt;
 
-pub const USAGE: &str =
-    "Usage: processing-svc [worker|process-once|process-message <json>|retention-cleanup [--execute]]";
+use chrono::NaiveDate;
+
+pub const USAGE: &str = "Usage: processing-svc [worker|process-once|process-message <json>|retention-cleanup [--execute]|publish-mosaic <product> [<YYYY-MM-DD>|latest] [--public-latest [--allow-incomplete-public-latest]]]";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Worker,
     ProcessOnce,
-    ProcessMessage { message: String },
-    RetentionCleanup { execute: bool },
+    ProcessMessage {
+        message: String,
+    },
+    RetentionCleanup {
+        execute: bool,
+    },
+    PublishMosaic {
+        product: String,
+        dataset_date: Option<NaiveDate>,
+        promote_public_latest: bool,
+        allow_incomplete_public_latest: bool,
+    },
 }
 
 impl Command {
@@ -18,6 +29,7 @@ impl Command {
             Self::ProcessOnce => "process-once",
             Self::ProcessMessage { .. } => "process-message",
             Self::RetentionCleanup { .. } => "retention-cleanup",
+            Self::PublishMosaic { .. } => "publish-mosaic",
         }
     }
 }
@@ -69,6 +81,12 @@ where
                 execute: true,
             }))
         }
+        [command] if command == "publish-mosaic" => {
+            Err(CommandError::new("publish-mosaic requires a product"))
+        }
+        [command, product, rest @ ..] if command == "publish-mosaic" => {
+            parse_publish_mosaic_args(product, rest)
+        }
         [command] if command == "process-message" => Err(CommandError::new(
             "process-message requires a JSON message argument",
         )),
@@ -93,6 +111,51 @@ where
         ))),
         [unknown, ..] => Err(CommandError::new(format!("unknown command '{unknown}'"))),
     }
+}
+
+fn parse_publish_mosaic_args(
+    product: &str,
+    args: &[String],
+) -> Result<CommandRequest, CommandError> {
+    let (dataset_date, remaining_args) = match args.split_first() {
+        Some((value, remaining_args)) if value == "latest" => (None, remaining_args),
+        Some((value, _)) if value.starts_with("--") => (None, args),
+        Some((value, remaining_args)) => (Some(parse_dataset_date(value)?), remaining_args),
+        None => (None, args),
+    };
+
+    let (promote_public_latest, allow_incomplete_public_latest) = match remaining_args {
+        [] => (false, false),
+        [flag] if flag == "--public-latest" => (true, false),
+        [public_flag, allow_flag]
+            if public_flag == "--public-latest"
+                && allow_flag == "--allow-incomplete-public-latest" =>
+        {
+            (true, true)
+        }
+        [flag] if flag == "--allow-incomplete-public-latest" => {
+            return Err(CommandError::new(
+                "--allow-incomplete-public-latest requires --public-latest",
+            ));
+        }
+        [extra, ..] => {
+            return Err(CommandError::new(format!(
+                "unexpected argument '{extra}' after publish-mosaic arguments"
+            )));
+        }
+    };
+
+    Ok(CommandRequest::Run(Command::PublishMosaic {
+        product: product.to_owned(),
+        dataset_date,
+        promote_public_latest,
+        allow_incomplete_public_latest,
+    }))
+}
+
+fn parse_dataset_date(value: &str) -> Result<NaiveDate, CommandError> {
+    NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .map_err(|_| CommandError::new("publish-mosaic dataset date must use YYYY-MM-DD"))
 }
 
 #[cfg(test)]
@@ -131,6 +194,67 @@ mod tests {
             parse_args(["retention-cleanup", "--execute"]).unwrap(),
             CommandRequest::Run(Command::RetentionCleanup { execute: true })
         );
+        assert_eq!(
+            parse_args(["publish-mosaic", "VNP46A2", "2026-05-21"]).unwrap(),
+            CommandRequest::Run(Command::PublishMosaic {
+                product: "VNP46A2".to_owned(),
+                dataset_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 5, 21).unwrap()),
+                promote_public_latest: false,
+                allow_incomplete_public_latest: false,
+            })
+        );
+        assert_eq!(
+            parse_args(["publish-mosaic", "VNP46A2"]).unwrap(),
+            CommandRequest::Run(Command::PublishMosaic {
+                product: "VNP46A2".to_owned(),
+                dataset_date: None,
+                promote_public_latest: false,
+                allow_incomplete_public_latest: false,
+            })
+        );
+        assert_eq!(
+            parse_args(["publish-mosaic", "VNP46A2", "latest", "--public-latest",]).unwrap(),
+            CommandRequest::Run(Command::PublishMosaic {
+                product: "VNP46A2".to_owned(),
+                dataset_date: None,
+                promote_public_latest: true,
+                allow_incomplete_public_latest: false,
+            })
+        );
+        assert_eq!(
+            parse_args(["publish-mosaic", "VNP46A2", "--public-latest",]).unwrap(),
+            CommandRequest::Run(Command::PublishMosaic {
+                product: "VNP46A2".to_owned(),
+                dataset_date: None,
+                promote_public_latest: true,
+                allow_incomplete_public_latest: false,
+            })
+        );
+        assert_eq!(
+            parse_args(["publish-mosaic", "VNP46A2", "2026-05-21", "--public-latest",]).unwrap(),
+            CommandRequest::Run(Command::PublishMosaic {
+                product: "VNP46A2".to_owned(),
+                dataset_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 5, 21).unwrap()),
+                promote_public_latest: true,
+                allow_incomplete_public_latest: false,
+            })
+        );
+        assert_eq!(
+            parse_args([
+                "publish-mosaic",
+                "VNP46A2",
+                "2026-05-21",
+                "--public-latest",
+                "--allow-incomplete-public-latest",
+            ])
+            .unwrap(),
+            CommandRequest::Run(Command::PublishMosaic {
+                product: "VNP46A2".to_owned(),
+                dataset_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 5, 21).unwrap()),
+                promote_public_latest: true,
+                allow_incomplete_public_latest: true,
+            })
+        );
     }
 
     #[test]
@@ -145,6 +269,32 @@ mod tests {
 
         assert!(error.contains("process-message requires a JSON message argument"));
         assert!(error.contains(USAGE));
+    }
+
+    #[test]
+    fn rejects_invalid_publish_mosaic_arguments() {
+        let missing_product = parse_args(["publish-mosaic"]).unwrap_err().to_string();
+        assert!(missing_product.contains("publish-mosaic requires a product"));
+
+        let invalid_date = parse_args(["publish-mosaic", "VNP46A2", "20260521"])
+            .unwrap_err()
+            .to_string();
+        assert!(invalid_date.contains("dataset date must use YYYY-MM-DD"));
+
+        let unexpected_flag = parse_args(["publish-mosaic", "VNP46A2", "2026-05-21", "--force"])
+            .unwrap_err()
+            .to_string();
+        assert!(unexpected_flag.contains("unexpected argument '--force'"));
+
+        let allow_without_public_latest = parse_args([
+            "publish-mosaic",
+            "VNP46A2",
+            "2026-05-21",
+            "--allow-incomplete-public-latest",
+        ])
+        .unwrap_err()
+        .to_string();
+        assert!(allow_without_public_latest.contains("requires --public-latest"));
     }
 
     #[test]

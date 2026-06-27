@@ -97,6 +97,10 @@ CREATE TABLE IF NOT EXISTS tile_sets (
     tile_count INTEGER NOT NULL,
     manifest_blob_path TEXT NOT NULL,
     latest BOOLEAN NOT NULL DEFAULT false,
+    product TEXT,
+    cadence TEXT,
+    tile_set_kind TEXT NOT NULL DEFAULT 'granule',
+    product_latest BOOLEAN NOT NULL DEFAULT false,
     retention_deleted_at TIMESTAMPTZ,
     retention_delete_reason TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -112,18 +116,24 @@ ON tile_sets(dataset_date DESC);
 CREATE INDEX IF NOT EXISTS idx_tile_sets_retention_cleanup
 ON tile_sets(classification_version, created_at DESC)
 WHERE retention_deleted_at IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tile_sets_product_latest_one
+ON tile_sets(product, classification_version, render_version)
+WHERE product_latest = true
+    AND product IS NOT NULL
+    AND retention_deleted_at IS NULL;
 ```
 
-Promotion order:
+Publication order for per-granule processing outputs:
 
 1. Upload all tile blobs.
 2. Upload immutable manifest.
-3. Insert `tile_sets` row with `latest = false`.
-4. In one transaction, set old latest false and new latest true.
-5. Upload `manifests/latest.json` pointing to immutable manifest.
-6. Record `processing_log.tile_set_id` and terminal `processed` status for the source processing message.
+3. Insert `tile_sets` row with `tile_set_kind = 'granule'`, `latest = false`, and `product_latest = false`.
+4. Record `processing_log.tile_set_id` and terminal `processed` status for the source processing message.
 
-Retention cleanup marks stale whole tile sets with `retention_deleted_at` and `retention_delete_reason` only after selected tile blobs and the immutable manifest have been deleted or found missing. Latest tile sets are not retention-deleted.
+Product/date mosaics are published by `processing-svc publish-mosaic <product> <YYYY-MM-DD> [--public-latest [--allow-incomplete-public-latest]]`. Mosaic publication uploads a separate tile namespace and manifest with all included `source_granules`, inserts `tile_set_kind = 'mosaic'`, promotes `product_latest` within the product/classification/render scope, uploads `manifests/latest/<product>.json`, and only updates global `latest` plus `manifests/latest.json` when `--public-latest` is provided. Mosaic manifests include optional `coverage` metadata comparing expected VIIRS h/v tiles for `TILE_BOUNDS` against processed source granules. Incomplete mosaics can be published for inspection, but public-latest promotion fails unless the explicit incomplete override is provided.
+
+Retention cleanup marks stale whole tile sets with `retention_deleted_at` and `retention_delete_reason` only after selected tile blobs and the immutable manifest have been deleted or found missing. Public latest and product-latest tile sets are not retention-deleted.
 
 ## `retention_cleanup_events`
 

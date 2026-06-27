@@ -6,7 +6,10 @@ use uuid::Uuid;
 
 use crate::{
     config::AppConfig,
-    tiles::{latest_manifest_blob_path, manifest_blob_path, GeographicBounds, TileMathError},
+    tiles::{
+        latest_manifest_blob_path, manifest_blob_path, GeographicBounds, TileMathError,
+        ViirsCoverageSummary,
+    },
 };
 
 #[derive(Debug, Error)]
@@ -35,6 +38,8 @@ pub struct TileManifest {
     pub tile_url_template: String,
     pub tile_count: u32,
     pub source_granules: Vec<SourceGranule>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<ViirsCoverageSummary>,
     pub checksums: ManifestChecksums,
 }
 
@@ -74,6 +79,7 @@ pub struct TileManifestInput {
     pub bounds: GeographicBounds,
     pub tile_count: u32,
     pub source_granules: Vec<SourceGranule>,
+    pub coverage: Option<ViirsCoverageSummary>,
 }
 
 impl TileManifest {
@@ -100,6 +106,7 @@ impl TileManifest {
             tile_url_template,
             tile_count: input.tile_count,
             source_granules: input.source_granules,
+            coverage: input.coverage,
             checksums: ManifestChecksums {
                 manifest_sha256: String::new(),
             },
@@ -180,6 +187,7 @@ mod tests {
 
     use super::*;
     use crate::config::TileBounds;
+    use crate::tiles::{summarize_viirs_coverage, ViirsTileCoord};
 
     fn test_config() -> AppConfig {
         AppConfig {
@@ -246,6 +254,7 @@ mod tests {
                     product: "VNP46A2".to_owned(),
                     blob_path: "VNP46A2/2026-05-21/h11v06.h5".to_owned(),
                 }],
+                coverage: None,
             },
         )
         .unwrap()
@@ -343,6 +352,7 @@ mod tests {
                     product: "VNP46A2".to_owned(),
                     blob_path: "VNP46A2/2026-05-21/h11v06.h5".to_owned(),
                 }],
+                coverage: None,
             },
         )
         .unwrap();
@@ -354,10 +364,49 @@ mod tests {
         assert!(json.contains(r#""tile_set_id": "2026-05-21-radiance-dark-sky-v1-a1b2c3d4""#));
         assert!(json.contains(r#""classification_version": "radiance-dark-sky-v1""#));
         assert!(json.contains(r#""tile_url_template": "https://tiles.lumenhorizon.com/tiles/2026-05-21-radiance-dark-sky-v1-a1b2c3d4/{z}/{x}/{y}.png""#));
+        assert!(!json.contains(r#""coverage""#));
         assert_eq!(
             manifest.manifest_blob_path().unwrap(),
             "manifests/2026-05-21-radiance-dark-sky-v1-a1b2c3d4.json"
         );
+    }
+
+    #[test]
+    fn serializes_optional_coverage_metadata() {
+        let coverage = summarize_viirs_coverage(
+            [ViirsTileCoord {
+                tile_h: 5,
+                tile_v: 4,
+            }],
+            Vec::<ViirsTileCoord>::new(),
+        );
+        let manifest = TileManifest::from_config(
+            &test_config(),
+            TileManifestInput {
+                tile_set_id: "2026-05-21-radiance-dark-sky-v1-a1b2c3d4".to_owned(),
+                dataset_date: NaiveDate::from_ymd_opt(2026, 5, 21).unwrap(),
+                generated_at: Utc.with_ymd_and_hms(2026, 5, 21, 9, 15, 0).unwrap(),
+                processor_version: "processing-svc:test-sha".to_owned(),
+                bounds: GeographicBounds {
+                    west: -125.0,
+                    south: 24.0,
+                    east: -66.0,
+                    north: 50.0,
+                },
+                tile_count: 12345,
+                source_granules: Vec::new(),
+                coverage: Some(coverage),
+            },
+        )
+        .unwrap();
+
+        let json = manifest.to_pretty_json().unwrap();
+
+        assert!(json.contains(r#""coverage""#));
+        assert!(json.contains(r#""expected_tile_count": 1"#));
+        assert!(json.contains(r#""present_tile_count": 0"#));
+        assert!(json.contains(r#""tile_h": 5"#));
+        assert!(json.contains(r#""tile_v": 4"#));
     }
 
     #[test]

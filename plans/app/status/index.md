@@ -2,7 +2,7 @@
 
 ## Current Snapshot
 
-The native app now renders the backend dark-sky tile set over MapKit. A multiplatform Xcode project targets iOS, macOS, and visionOS from shared code; the `AppCore` Swift package provides environment-driven configuration, a typed backend client with strict contract models, and the pure overlay/state logic that drives the map. The app fetches the latest manifest, builds a validated `MKTileOverlay`, and exposes loading, empty, unavailable/retry, and opacity controls.
+The native app now renders the backend dark-sky tile set over MapKit. A multiplatform Xcode project targets iOS, macOS, and visionOS from shared code; the `AppCore` Swift package provides environment-driven configuration, a typed backend client with strict contract models, and the pure overlay/state logic that drives the map. The app fetches the latest manifest, builds a validated `MKTileOverlay`, and exposes loading, empty, unavailable/retry, and opacity controls. With local tile serving resolved, the app renders real dark-sky tile imagery against a local backend; release builds and production manifests are unchanged.
 
 ## Already Done
 
@@ -43,7 +43,11 @@ The active app roadmap is at [../00-implementation-roadmap.md](../00-implementat
 
 ## Known Limitations
 
-- Local tile imagery does not render yet. Backend-generated manifests carry the production CDN host (`tiles.lumenhorizon.com`) in `tile_url_template`, which is unreachable from local simulators, and locally rendered tiles in Azurite are not exposed as anonymously-readable tile URLs. The app overlay/zoom/bounds logic is verified correct (it requests the right tiles, confirmed by tile-fetch logs), so the gap is backend local-dev tile serving. See [../../backend/investigation/local-tile-serving.md](../../backend/investigation/local-tile-serving.md).
+- Reaching a local HTTP backend from the app requires the macOS App Sandbox outgoing-connections entitlement and a local-networking ATS exception (loopback hosts are permitted). This is a local-development constraint only and does not affect release builds against the production API.
+
+## Resolved Limitations
+
+- Local tile imagery now renders. Local setup makes the `processed-tiles` Azurite container anonymously blob-readable and stamps newly generated manifests with the local Azurite blob URL via `TILE_CDN_BASE_URL`, so the app loads real tiles directly from the manifest `tile_url_template` without per-run manifest edits. Production behavior is unchanged because `processing-svc` still defaults to the production CDN when `TILE_CDN_BASE_URL` is unset. See [../../backend/investigation/local-tile-serving.md](../../backend/investigation/local-tile-serving.md).
 
 ## Remaining Work
 

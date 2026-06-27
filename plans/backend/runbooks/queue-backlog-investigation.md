@@ -46,6 +46,7 @@ Expected result:
 
 - If no message is available, the command exits cleanly after reporting no queued work.
 - If a message is available, the command logs the ingest id and either records a terminal status or leaves the message for visibility-timeout retry.
+- Messages whose source tile bounds do not overlap `TILE_BOUNDS` are terminally marked `rejected` and deleted from the active queue.
 
 ## Optional Queue Inspection
 
@@ -68,6 +69,7 @@ Expected result:
 - Message payload shape does not match the processing contract.
 - Source raw blob is missing or has an unexpected relative path.
 - GDAL cannot read the expected HDF-EOS5 datasets.
+- Source tile bounds do not overlap `TILE_BOUNDS`; these messages should become `rejected`, not repeatedly retried.
 - Quality filtering rejects the granule.
 - Message exceeded max dequeue count and moved to the dead-letter queue.
 

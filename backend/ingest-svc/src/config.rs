@@ -2,6 +2,7 @@ use std::{fmt, time::Duration};
 
 use base64::Engine as _;
 pub use shared::http_retry::RetryConfig;
+use shared::slippy_tiles::GeographicBounds;
 use tracing_subscriber::EnvFilter;
 
 use crate::{commands::Command, models::ProductCadence};
@@ -30,7 +31,6 @@ pub struct AppConfig {
     pub ingest_products: Vec<String>,
     pub bounding_box: BoundingBox,
     pub max_cloud_fraction: f32,
-    pub ingest_max_granules: Option<usize>,
     pub internal_admin_auth: Option<InternalAdminAuthConfig>,
     pub http_request_timeout: Duration,
     pub http_retry: RetryConfig,
@@ -120,10 +120,6 @@ impl AppConfig {
                 "MAX_CLOUD_FRACTION",
                 DEFAULT_MAX_CLOUD_FRACTION.to_string(),
             ))?,
-            ingest_max_granules: parse_ingest_max_granules(read_optional(
-                &lookup,
-                "INGEST_MAX_GRANULES",
-            ))?,
             internal_admin_auth: parse_internal_admin_auth_config(&lookup)?,
             http_request_timeout: parse_positive_duration_seconds(
                 "HTTP_REQUEST_TIMEOUT_SECONDS",
@@ -153,6 +149,17 @@ impl fmt::Display for BoundingBox {
             "{},{},{},{}",
             self.west, self.south, self.east, self.north
         )
+    }
+}
+
+impl From<BoundingBox> for GeographicBounds {
+    fn from(bounds: BoundingBox) -> Self {
+        Self {
+            west: bounds.west,
+            south: bounds.south,
+            east: bounds.east,
+            north: bounds.north,
+        }
     }
 }
 
@@ -343,30 +350,6 @@ fn parse_max_cloud_fraction(value: String) -> Result<f32, ConfigError> {
     }
 
     Ok(fraction)
-}
-
-fn parse_ingest_max_granules(value: Option<String>) -> Result<Option<usize>, ConfigError> {
-    let Some(value) = value else {
-        return Ok(None);
-    };
-
-    let count = value
-        .parse::<usize>()
-        .map_err(|_| ConfigError::InvalidValue {
-            variable: "INGEST_MAX_GRANULES",
-            value: value.clone(),
-            expected: "expected a positive integer",
-        })?;
-
-    if count == 0 {
-        return Err(ConfigError::InvalidValue {
-            variable: "INGEST_MAX_GRANULES",
-            value: value.clone(),
-            expected: "expected a positive integer",
-        });
-    }
-
-    Ok(Some(count))
 }
 
 fn parse_internal_admin_auth_config<F>(
@@ -580,7 +563,6 @@ mod tests {
         assert_eq!(config.ingest_products, ["VNP46A2", "VJ146A2"]);
         assert_eq!(config.bounding_box.to_string(), "-125,24,-66,50");
         assert_eq!(config.max_cloud_fraction, 0.4);
-        assert_eq!(config.ingest_max_granules, None);
         assert!(config.internal_admin_auth.is_none());
         assert_eq!(config.http_request_timeout.as_secs(), 30);
         assert_eq!(config.http_retry.max_attempts, 3);
@@ -662,41 +644,11 @@ mod tests {
     }
 
     #[test]
-    fn loads_ingest_max_granules() {
-        let mut env = valid_env();
-        env.insert("INGEST_MAX_GRANULES", "1".to_owned());
-
-        let config = load_from(env).unwrap();
-
-        assert_eq!(config.ingest_max_granules, Some(1));
-    }
-
-    #[test]
     fn loads_monthly_cadence_from_command() {
         let config = load_ingest_from(valid_env(), ProductCadence::Monthly).unwrap();
 
         assert_eq!(config.ingest_cadence, ProductCadence::Monthly);
         assert_eq!(config.ingest_products, ["VNP46A3"]);
-    }
-
-    #[test]
-    fn rejects_zero_ingest_max_granules() {
-        let mut env = valid_env();
-        env.insert("INGEST_MAX_GRANULES", "0".to_owned());
-
-        let error = load_from(env).unwrap_err().to_string();
-
-        assert!(error.contains("invalid INGEST_MAX_GRANULES"));
-    }
-
-    #[test]
-    fn rejects_invalid_ingest_max_granules() {
-        let mut env = valid_env();
-        env.insert("INGEST_MAX_GRANULES", "many".to_owned());
-
-        let error = load_from(env).unwrap_err().to_string();
-
-        assert!(error.contains("invalid INGEST_MAX_GRANULES"));
     }
 
     #[test]

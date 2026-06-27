@@ -15,6 +15,8 @@ pub type StorageFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, StorageErr
 pub trait TileManifestStorage: Send + Sync {
     fn latest_manifest(&self) -> StorageFuture<'_, Value>;
 
+    fn latest_manifest_for_product<'a>(&'a self, product: &'a str) -> StorageFuture<'a, Value>;
+
     fn manifest_by_id<'a>(&'a self, tile_set_id: &'a str) -> StorageFuture<'a, Value>;
 }
 
@@ -67,6 +69,15 @@ impl TileManifestStorageClient {
         self.read_json_blob(&pointer.manifest_blob_path).await
     }
 
+    pub async fn latest_manifest_for_product(&self, product: &str) -> Result<Value, StorageError> {
+        let pointer = self
+            .latest_pointer_at(&product_latest_manifest_blob_path(product)?)
+            .await?;
+        validate_manifest_blob_path(&pointer.manifest_blob_path)?;
+
+        self.read_json_blob(&pointer.manifest_blob_path).await
+    }
+
     pub async fn manifest_by_id(&self, tile_set_id: &str) -> Result<Value, StorageError> {
         let blob_path = manifest_blob_path(tile_set_id)?;
 
@@ -74,7 +85,14 @@ impl TileManifestStorageClient {
     }
 
     async fn latest_pointer(&self) -> Result<LatestManifestPointer, StorageError> {
-        let value = self.read_json_blob(LATEST_MANIFEST_BLOB_PATH).await?;
+        self.latest_pointer_at(LATEST_MANIFEST_BLOB_PATH).await
+    }
+
+    async fn latest_pointer_at(
+        &self,
+        blob_path: &str,
+    ) -> Result<LatestManifestPointer, StorageError> {
+        let value = self.read_json_blob(blob_path).await?;
 
         serde_json::from_value(value).map_err(StorageError::ParseLatestPointer)
     }
@@ -152,6 +170,12 @@ impl TileManifestStorage for TileManifestStorageClient {
         Box::pin(TileManifestStorageClient::latest_manifest(self))
     }
 
+    fn latest_manifest_for_product<'a>(&'a self, product: &'a str) -> StorageFuture<'a, Value> {
+        Box::pin(TileManifestStorageClient::latest_manifest_for_product(
+            self, product,
+        ))
+    }
+
     fn manifest_by_id<'a>(&'a self, tile_set_id: &'a str) -> StorageFuture<'a, Value> {
         Box::pin(TileManifestStorageClient::manifest_by_id(self, tile_set_id))
     }
@@ -208,6 +232,11 @@ fn manifest_blob_path(tile_set_id: &str) -> Result<String, StorageError> {
     Ok(format!("manifests/{tile_set_id}.json"))
 }
 
+fn product_latest_manifest_blob_path(product: &str) -> Result<String, StorageError> {
+    validate_tile_set_id(product)?;
+    Ok(format!("manifests/latest/{product}.json"))
+}
+
 pub(crate) fn validate_tile_set_id(tile_set_id: &str) -> Result<(), StorageError> {
     let valid = !tile_set_id.trim().is_empty()
         && tile_set_id.len() <= MAX_TILE_SET_ID_LENGTH
@@ -239,7 +268,10 @@ mod tests {
 
     use shared::http_retry::RetryConfig;
 
-    use super::{manifest_blob_path, validate_manifest_blob_path, TileManifestStorageClient};
+    use super::{
+        manifest_blob_path, product_latest_manifest_blob_path, validate_manifest_blob_path,
+        TileManifestStorageClient,
+    };
     use crate::config::TileManifestStorageConfig;
 
     const TEST_STORAGE_ACCESS_KEY: &str = "dGVzdC1zdG9yYWdlLWFjY291bnQta2V5";
@@ -267,6 +299,14 @@ mod tests {
         assert_eq!(
             manifest_blob_path("2026-05-21-radiance-dark-sky-v1-a1b2c3d4").unwrap(),
             "manifests/2026-05-21-radiance-dark-sky-v1-a1b2c3d4.json"
+        );
+    }
+
+    #[test]
+    fn builds_product_latest_manifest_blob_path() {
+        assert_eq!(
+            product_latest_manifest_blob_path("VNP46A2").unwrap(),
+            "manifests/latest/VNP46A2.json"
         );
     }
 

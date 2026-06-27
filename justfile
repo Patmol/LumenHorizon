@@ -28,6 +28,10 @@ serve-api:
 ingest cadence="daily":
     ./scripts/dev-ingest.sh {{cadence}}
 
+# Run the processing worker until the visible queue is empty
+processing:
+    cd backend && set -a && source ../.env && set +a && cargo run -p processing-svc -- worker
+
 # Recover validated/downloaded ingest rows and pending enqueue outbox records
 recover-ingest:
     cd backend && set -a && source ../.env && set +a && cargo run -p ingest-svc -- recover-ingest
@@ -35,6 +39,10 @@ recover-ingest:
 # Replay one rejected ingest row by id
 replay-rejected ingest_id:
     cd backend && set -a && source ../.env && set +a && cargo run -p ingest-svc -- replay-rejected {{ingest_id}}
+
+# Publish a mosaic from processed granules; omit dataset_date or pass latest for the newest eligible date
+publish-mosaic product dataset_date="" public_latest="false" allow_incomplete="false":
+    cd backend && set -a && source ../.env && set +a && dataset_date_arg="{{dataset_date}}" && public_latest_arg="{{public_latest}}" && allow_incomplete_arg="{{allow_incomplete}}" && if [[ "$dataset_date_arg" == "true" || "$dataset_date_arg" == "false" ]]; then allow_incomplete_arg="$public_latest_arg"; public_latest_arg="$dataset_date_arg"; dataset_date_arg=""; fi && mosaic_args=("{{product}}") && if [[ -n "$dataset_date_arg" && "$dataset_date_arg" != "latest" ]]; then mosaic_args+=("$dataset_date_arg"); fi && if [[ "$public_latest_arg" == "true" ]]; then mosaic_args+=(--public-latest); fi && if [[ "$allow_incomplete_arg" == "true" ]]; then mosaic_args+=(--allow-incomplete-public-latest); fi && cargo run -p processing-svc -- publish-mosaic "${mosaic_args[@]}"
 
 # Preview retention cleanup selections without deleting blobs
 retention-cleanup:

@@ -1,4 +1,5 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
+use shared::processing_message::ProductCadence;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -24,6 +25,39 @@ pub struct TileSetRetentionCandidate {
     pub manifest_blob_path: String,
     pub created_at: DateTime<Utc>,
     pub tile_count: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MosaicSourceRecord {
+    pub ingest_id: Uuid,
+    pub blob_path: String,
+    pub product: String,
+    pub granule_date: DateTime<Utc>,
+    pub tile_h: i16,
+    pub tile_v: i16,
+    pub tile_set_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TileSetKind {
+    Granule,
+    Mosaic,
+}
+
+impl TileSetKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Granule => "granule",
+            Self::Mosaic => "mosaic",
+        }
+    }
+}
+
+pub struct TileSetInsert<'a> {
+    pub manifest: &'a TileManifest,
+    pub product: Option<&'a str>,
+    pub cadence: Option<ProductCadence>,
+    pub kind: TileSetKind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -176,6 +210,7 @@ pub async fn select_tile_set_retention_candidates(
         JOIN ranked_tile_sets ON ranked_tile_sets.id = tile_sets.id
         WHERE tile_sets.retention_deleted_at IS NULL
           AND tile_sets.latest = false
+                    AND tile_sets.product_latest = false
           AND tile_sets.created_at < now() - ($1::bigint * interval '1 day')
           AND ranked_tile_sets.retention_rank > ($2::bigint + 1)
         ORDER BY tile_sets.created_at, tile_sets.id
@@ -214,6 +249,7 @@ pub async fn mark_tile_set_retention_deleted(
             retention_delete_reason = $2
         WHERE id = $1
           AND latest = false
+                    AND product_latest = false
           AND retention_deleted_at IS NULL
         "#,
     )
@@ -473,13 +509,106 @@ pub async fn mark_processing_processed_with_tile_set(
     Ok(())
 }
 
-pub async fn insert_tile_set(pool: &PgPool, manifest: &TileManifest) -> Result<(), DbError> {
+pub async fn select_mosaic_sources(
+    pool: &PgPool,
+    product: &str,
+    dataset_date: NaiveDate,
+    classification_version: &str,
+    render_version: &str,
+) -> Result<Vec<MosaicSourceRecord>, DbError> {
+    let rows = sqlx::query_as::<_, (Uuid, String, String, DateTime<Utc>, i16, i16, String)>(
+        r#"
+        SELECT
+            processing_log.ingest_id,
+            processing_log.source_blob_path,
+            processing_log.product,
+            processing_log.granule_date,
+            processing_log.tile_h,
+            processing_log.tile_v,
+            processing_log.tile_set_id AS tile_set_id
+        FROM processing_log
+        JOIN tile_sets ON tile_sets.id = processing_log.tile_set_id
+        WHERE processing_log.status = 'processed'
+          AND processing_log.product = $1
+          AND processing_log.granule_date::date = $2
+          AND processing_log.tile_set_id IS NOT NULL
+          AND tile_sets.classification_version = $3
+          AND tile_sets.render_version = $4
+          AND tile_sets.tile_set_kind = 'granule'
+          AND tile_sets.retention_deleted_at IS NULL
+        ORDER BY processing_log.tile_h, processing_log.tile_v, processing_log.ingest_id
+        "#,
+    )
+    .bind(product)
+    .bind(dataset_date)
+    .bind(classification_version)
+    .bind(render_version)
+    .fetch_all(pool)
+    .await
+    .map_err(DbError::SelectMosaicSources)?;
+
+    Ok(rows
+        .into_iter()
+        .map(
+            |(ingest_id, blob_path, product, granule_date, tile_h, tile_v, tile_set_id)| {
+                MosaicSourceRecord {
+                    ingest_id,
+                    blob_path,
+                    product,
+                    granule_date,
+                    tile_h,
+                    tile_v,
+                    tile_set_id,
+                }
+            },
+        )
+        .collect())
+}
+
+pub async fn select_latest_mosaic_dataset_date(
+    pool: &PgPool,
+    product: &str,
+    classification_version: &str,
+    render_version: &str,
+) -> Result<Option<NaiveDate>, DbError> {
+    sqlx::query_scalar::<_, NaiveDate>(
+        r#"
+        SELECT processing_log.granule_date::date AS dataset_date
+        FROM processing_log
+        JOIN tile_sets ON tile_sets.id = processing_log.tile_set_id
+        WHERE processing_log.status = 'processed'
+          AND processing_log.product = $1
+          AND processing_log.tile_set_id IS NOT NULL
+          AND tile_sets.classification_version = $2
+          AND tile_sets.render_version = $3
+          AND tile_sets.tile_set_kind = 'granule'
+          AND tile_sets.retention_deleted_at IS NULL
+        GROUP BY processing_log.granule_date::date
+        HAVING count(*) >= 2
+        ORDER BY processing_log.granule_date::date DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(product)
+    .bind(classification_version)
+    .bind(render_version)
+    .fetch_optional(pool)
+    .await
+    .map_err(DbError::SelectMosaicSources)
+}
+
+pub async fn insert_tile_set_with_metadata(
+    pool: &PgPool,
+    insert: TileSetInsert<'_>,
+) -> Result<(), DbError> {
+    let manifest = insert.manifest;
     let tile_count =
         i32::try_from(manifest.tile_count).map_err(|_| DbError::TileCountTooLarge {
             tile_count: manifest.tile_count,
         })?;
     let bounds = serde_json::to_value(manifest.bounds).map_err(DbError::SerializeTileSetBounds)?;
     let manifest_blob_path = manifest.manifest_blob_path()?;
+    let cadence = insert.cadence.map(ProductCadence::as_str);
 
     sqlx::query(
         r#"
@@ -495,9 +624,13 @@ pub async fn insert_tile_set(pool: &PgPool, manifest: &TileManifest) -> Result<(
             bounds,
             tile_count,
             manifest_blob_path,
-            latest
+            latest,
+            product,
+            cadence,
+            tile_set_kind,
+            product_latest
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, false)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, false, $12, $13, $14, false)
         "#,
     )
     .bind(&manifest.tile_set_id)
@@ -511,9 +644,94 @@ pub async fn insert_tile_set(pool: &PgPool, manifest: &TileManifest) -> Result<(
     .bind(bounds)
     .bind(tile_count)
     .bind(manifest_blob_path)
+    .bind(insert.product)
+    .bind(cadence)
+    .bind(insert.kind.as_str())
     .execute(pool)
     .await
     .map_err(DbError::InsertTileSet)?;
+
+    Ok(())
+}
+
+pub async fn promote_product_latest_tile_set(
+    pool: &PgPool,
+    tile_set_id: &str,
+) -> Result<(), DbError> {
+    let mut transaction = pool.begin().await.map_err(DbError::BeginTransaction)?;
+
+    let row = sqlx::query_as::<_, (Option<String>, String, String, String)>(
+        r#"
+        SELECT product, classification_version, render_version, tile_set_kind
+        FROM tile_sets
+        WHERE id = $1
+          AND retention_deleted_at IS NULL
+        "#,
+    )
+    .bind(tile_set_id)
+    .fetch_optional(&mut *transaction)
+    .await
+    .map_err(DbError::PromoteTileSet)?;
+
+    let Some((product, classification_version, render_version, tile_set_kind)) = row else {
+        return Err(DbError::TileSetNotFound {
+            tile_set_id: tile_set_id.to_owned(),
+        });
+    };
+
+    let Some(product) = product else {
+        return Err(DbError::TileSetMissingProduct {
+            tile_set_id: tile_set_id.to_owned(),
+        });
+    };
+
+    if tile_set_kind != TileSetKind::Mosaic.as_str() {
+        return Err(DbError::TileSetNotMosaic {
+            tile_set_id: tile_set_id.to_owned(),
+            tile_set_kind,
+        });
+    }
+
+    sqlx::query(
+        r#"
+        UPDATE tile_sets
+        SET product_latest = false
+        WHERE product_latest = true
+          AND product = $1
+          AND classification_version = $2
+          AND render_version = $3
+        "#,
+    )
+    .bind(&product)
+    .bind(&classification_version)
+    .bind(&render_version)
+    .execute(&mut *transaction)
+    .await
+    .map_err(DbError::PromoteTileSet)?;
+
+    let result = sqlx::query(
+        r#"
+        UPDATE tile_sets
+        SET product_latest = true
+        WHERE id = $1
+          AND retention_deleted_at IS NULL
+        "#,
+    )
+    .bind(tile_set_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(DbError::PromoteTileSet)?;
+
+    if result.rows_affected() != 1 {
+        return Err(DbError::TileSetNotFound {
+            tile_set_id: tile_set_id.to_owned(),
+        });
+    }
+
+    transaction
+        .commit()
+        .await
+        .map_err(DbError::CommitTransaction)?;
 
     Ok(())
 }
@@ -582,10 +800,21 @@ pub enum DbError {
     SerializeTileSetBounds(serde_json::Error),
     #[error("database error: failed to select retention candidates: {0}")]
     SelectRetentionCandidates(sqlx::Error),
+    #[error("database error: failed to select mosaic sources: {0}")]
+    SelectMosaicSources(sqlx::Error),
     #[error("database error: tile_count {tile_count} exceeds PostgreSQL integer range")]
     TileCountTooLarge { tile_count: u32 },
     #[error("database error: tile_set '{tile_set_id}' does not exist")]
     TileSetNotFound { tile_set_id: String },
+    #[error("database error: tile_set '{tile_set_id}' does not have product metadata")]
+    TileSetMissingProduct { tile_set_id: String },
+    #[error(
+        "database error: tile_set '{tile_set_id}' has kind '{tile_set_kind}', expected mosaic"
+    )]
+    TileSetNotMosaic {
+        tile_set_id: String,
+        tile_set_kind: String,
+    },
     #[error("database error: failed to update processing_log: {0}")]
     UpdateProcessingLog(sqlx::Error),
     #[error("database error: failed to update retention metadata: {0}")]
@@ -596,14 +825,15 @@ pub enum DbError {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{TimeZone, Utc};
+    use chrono::{DateTime, NaiveDate, TimeZone, Utc};
     use sqlx::{PgPool, Row};
     use uuid::Uuid;
 
     use super::{
-        insert_tile_set, mark_processing_deadlettered, mark_processing_failed,
+        insert_tile_set_with_metadata, mark_processing_deadlettered, mark_processing_failed,
         mark_processing_processed_with_tile_set, mark_processing_rejected, promote_latest_tile_set,
-        update_processing_metadata, upsert_processing_started, DbError,
+        promote_product_latest_tile_set, select_latest_mosaic_dataset_date,
+        update_processing_metadata, upsert_processing_started, DbError, TileSetInsert, TileSetKind,
     };
     use crate::models::ProcessingMessage;
     use crate::{
@@ -611,10 +841,29 @@ mod tests {
         manifest::{TileManifest, TileManifestInput},
         tiles::GeographicBounds,
     };
+    use shared::processing_message::ProductCadence;
 
     async fn insert_ingest_row(pool: &PgPool) -> Uuid {
+        insert_ingest_row_for(
+            pool,
+            "VNP46A2",
+            Utc.with_ymd_and_hms(2026, 5, 21, 0, 0, 0).unwrap(),
+            11,
+            6,
+        )
+        .await
+    }
+
+    async fn insert_ingest_row_for(
+        pool: &PgPool,
+        product: &str,
+        granule_date: DateTime<Utc>,
+        tile_h: i16,
+        tile_v: i16,
+    ) -> Uuid {
         let ingest_id = Uuid::new_v4();
-        let granule_date = Utc.with_ymd_and_hms(2026, 5, 21, 0, 0, 0).unwrap();
+        let dataset_date = granule_date.date_naive();
+        let blob_path = format!("{product}/{dataset_date}/h{tile_h:02}v{tile_v:02}.h5");
 
         sqlx::query(
             r#"
@@ -629,11 +878,18 @@ mod tests {
                 status,
                 error_message
             )
-            VALUES ($1, 'VNP46A2', $2, 'VNP46A2/2026-05-21/h11v06.h5', 11, 6, $3, 'enqueued', NULL)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, 'enqueued', NULL)
             "#,
         )
         .bind(ingest_id)
-        .bind(format!("VNP46A2.A2026141.h11v06.{}.h5", ingest_id))
+        .bind(product)
+        .bind(format!(
+            "{product}.A{}.h{tile_h:02}v{tile_v:02}.{ingest_id}.h5",
+            granule_date.format("%Y%j")
+        ))
+        .bind(blob_path)
+        .bind(tile_h)
+        .bind(tile_v)
         .bind(granule_date)
         .execute(pool)
         .await
@@ -643,18 +899,50 @@ mod tests {
     }
 
     fn processing_message(ingest_id: Uuid) -> ProcessingMessage {
-        ProcessingMessage::new(
+        processing_message_for(
             ingest_id,
-            "VNP46A2/2026-05-21/h11v06.h5",
             "VNP46A2",
             Utc.with_ymd_and_hms(2026, 5, 21, 0, 0, 0).unwrap(),
             11,
             6,
         )
+    }
+
+    fn processing_message_for(
+        ingest_id: Uuid,
+        product: &str,
+        granule_date: DateTime<Utc>,
+        tile_h: i16,
+        tile_v: i16,
+    ) -> ProcessingMessage {
+        let dataset_date = granule_date.date_naive();
+
+        ProcessingMessage::new(
+            ingest_id,
+            &format!("{product}/{dataset_date}/h{tile_h:02}v{tile_v:02}.h5"),
+            product,
+            granule_date,
+            tile_h,
+            tile_v,
+        )
         .expect("sample processing message should be valid")
     }
 
     fn tile_manifest(tile_set_id: &str) -> TileManifest {
+        tile_manifest_for(
+            tile_set_id,
+            chrono::NaiveDate::from_ymd_opt(2026, 5, 21).unwrap(),
+            "radiance-dark-sky-v1",
+            "tiles-v1",
+        )
+    }
+
+    fn tile_manifest_for(
+        tile_set_id: &str,
+        dataset_date: NaiveDate,
+        classification_version: &str,
+        render_version: &str,
+    ) -> TileManifest {
         let config = crate::config::AppConfig::from_lookup(|name| match name {
             "DATABASE_URL" => Some("postgres://localhost/lumenhorizon".to_owned()),
             "AZURE_STORAGE_ACCOUNT" => Some("devstoreaccount1".to_owned()),
@@ -663,11 +951,11 @@ mod tests {
         })
         .expect("test config");
 
-        TileManifest::from_config(
+        let mut manifest = TileManifest::from_config(
             &config,
             TileManifestInput {
                 tile_set_id: tile_set_id.to_owned(),
-                dataset_date: chrono::NaiveDate::from_ymd_opt(2026, 5, 21).unwrap(),
+                dataset_date,
                 generated_at: Utc.with_ymd_and_hms(2026, 5, 21, 9, 15, 0).unwrap(),
                 processor_version: "processing-svc:test-sha".to_owned(),
                 bounds: GeographicBounds::from(TileBounds {
@@ -678,9 +966,73 @@ mod tests {
                 }),
                 tile_count: 12345,
                 source_granules: Vec::new(),
+                coverage: None,
             },
         )
-        .expect("tile manifest")
+        .expect("tile manifest");
+        manifest.classification_version = classification_version.to_owned();
+        manifest.render_version = render_version.to_owned();
+
+        manifest
+    }
+
+    async fn insert_granule_tile_set(pool: &PgPool, manifest: &TileManifest) {
+        insert_tile_set_with_metadata(
+            pool,
+            TileSetInsert {
+                manifest,
+                product: Some("VNP46A2"),
+                cadence: Some(ProductCadence::Daily),
+                kind: TileSetKind::Granule,
+            },
+        )
+        .await
+        .expect("insert granule tile set");
+    }
+
+    async fn insert_processed_source(
+        pool: &PgPool,
+        product: &str,
+        granule_date: DateTime<Utc>,
+        tile_h: i16,
+        tile_v: i16,
+        classification_version: &str,
+        render_version: &str,
+        kind: TileSetKind,
+    ) -> TileManifest {
+        let ingest_id = insert_ingest_row_for(pool, product, granule_date, tile_h, tile_v).await;
+        let message = processing_message_for(ingest_id, product, granule_date, tile_h, tile_v);
+        let tile_set_id = format!(
+            "{}-{classification_version}-{render_version}-h{tile_h:02}v{tile_v:02}-{}",
+            granule_date.date_naive(),
+            Uuid::new_v4().simple()
+        );
+        let manifest = tile_manifest_for(
+            &tile_set_id,
+            granule_date.date_naive(),
+            classification_version,
+            render_version,
+        );
+
+        upsert_processing_started(pool, &message)
+            .await
+            .expect("create processing_log row");
+        insert_tile_set_with_metadata(
+            pool,
+            TileSetInsert {
+                manifest: &manifest,
+                product: Some(product),
+                cadence: Some(ProductCadence::Daily),
+                kind,
+            },
+        )
+        .await
+        .expect("insert source tile set");
+        mark_processing_processed_with_tile_set(pool, ingest_id, &manifest.tile_set_id)
+            .await
+            .expect("mark source processed");
+
+        manifest
     }
 
     #[sqlx::test(migrations = "../db-migrate/migrations")]
@@ -908,9 +1260,7 @@ mod tests {
         upsert_processing_started(&pool, &message)
             .await
             .expect("create processing_log row");
-        insert_tile_set(&pool, &manifest)
-            .await
-            .expect("insert tile set");
+        insert_granule_tile_set(&pool, &manifest).await;
         mark_processing_processed_with_tile_set(&pool, ingest_id, &manifest.tile_set_id)
             .await
             .expect("mark processing processed with tile set");
@@ -939,16 +1289,81 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "../db-migrate/migrations")]
+    async fn latest_mosaic_dataset_date_uses_newest_eligible_processed_sources(pool: PgPool) {
+        let target_date = Utc.with_ymd_and_hms(2026, 5, 22, 0, 0, 0).unwrap();
+        let newer_but_single_source = Utc.with_ymd_and_hms(2026, 5, 23, 0, 0, 0).unwrap();
+
+        insert_processed_source(
+            &pool,
+            "VNP46A2",
+            target_date,
+            11,
+            6,
+            "radiance-dark-sky-v1",
+            "tiles-v1",
+            TileSetKind::Granule,
+        )
+        .await;
+        insert_processed_source(
+            &pool,
+            "VNP46A2",
+            target_date,
+            12,
+            6,
+            "radiance-dark-sky-v1",
+            "tiles-v1",
+            TileSetKind::Granule,
+        )
+        .await;
+        insert_processed_source(
+            &pool,
+            "VNP46A2",
+            newer_but_single_source,
+            11,
+            6,
+            "radiance-dark-sky-v1",
+            "tiles-v1",
+            TileSetKind::Granule,
+        )
+        .await;
+        insert_processed_source(
+            &pool,
+            "VNP46A2",
+            newer_but_single_source,
+            12,
+            6,
+            "radiance-dark-sky-v1",
+            "tiles-v1",
+            TileSetKind::Mosaic,
+        )
+        .await;
+        insert_processed_source(
+            &pool,
+            "VNP46A2",
+            newer_but_single_source,
+            13,
+            6,
+            "radiance-dark-sky-v1",
+            "tiles-v2",
+            TileSetKind::Granule,
+        )
+        .await;
+
+        let latest_date =
+            select_latest_mosaic_dataset_date(&pool, "VNP46A2", "radiance-dark-sky-v1", "tiles-v1")
+                .await
+                .expect("select latest mosaic dataset date");
+
+        assert_eq!(latest_date, Some(target_date.date_naive()));
+    }
+
+    #[sqlx::test(migrations = "../db-migrate/migrations")]
     async fn tile_set_insert_and_latest_promotion_are_transactional(pool: PgPool) {
         let first = tile_manifest("2026-05-21-radiance-dark-sky-v1-a1b2c3d4");
         let second = tile_manifest("2026-05-22-radiance-dark-sky-v1-deadbeef");
 
-        insert_tile_set(&pool, &first)
-            .await
-            .expect("insert first tile set");
-        insert_tile_set(&pool, &second)
-            .await
-            .expect("insert second tile set");
+        insert_granule_tile_set(&pool, &first).await;
+        insert_granule_tile_set(&pool, &second).await;
 
         promote_latest_tile_set(&pool, &first.tile_set_id)
             .await
@@ -971,5 +1386,123 @@ mod tests {
         assert_eq!(latest_rows.len(), 1);
         assert_eq!(latest_rows[0].get::<String, _>("id"), second.tile_set_id);
         assert!(latest_rows[0].get::<bool, _>("latest"));
+    }
+
+    #[sqlx::test(migrations = "../db-migrate/migrations")]
+    async fn product_latest_promotion_is_scoped_by_product(pool: PgPool) {
+        let first_daily = tile_manifest("2026-05-21-radiance-dark-sky-v1-daily111");
+        let second_daily = tile_manifest("2026-05-22-radiance-dark-sky-v1-daily222");
+        let monthly = tile_manifest("2026-05-01-radiance-dark-sky-v1-month111");
+
+        for manifest in [&first_daily, &second_daily] {
+            insert_tile_set_with_metadata(
+                &pool,
+                TileSetInsert {
+                    manifest,
+                    product: Some("VNP46A2"),
+                    cadence: Some(ProductCadence::Daily),
+                    kind: TileSetKind::Mosaic,
+                },
+            )
+            .await
+            .expect("insert daily mosaic tile set");
+        }
+        insert_tile_set_with_metadata(
+            &pool,
+            TileSetInsert {
+                manifest: &monthly,
+                product: Some("VNP46A3"),
+                cadence: Some(ProductCadence::Monthly),
+                kind: TileSetKind::Mosaic,
+            },
+        )
+        .await
+        .expect("insert monthly mosaic tile set");
+
+        promote_product_latest_tile_set(&pool, &first_daily.tile_set_id)
+            .await
+            .expect("promote first daily mosaic");
+        promote_product_latest_tile_set(&pool, &monthly.tile_set_id)
+            .await
+            .expect("promote monthly mosaic");
+        promote_product_latest_tile_set(&pool, &second_daily.tile_set_id)
+            .await
+            .expect("promote second daily mosaic");
+
+        let product_latest_rows = sqlx::query(
+            r#"
+            SELECT id, product, product_latest, latest
+            FROM tile_sets
+            WHERE product_latest = true
+            ORDER BY product, id
+            "#,
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("load product latest tile sets");
+
+        assert_eq!(product_latest_rows.len(), 2);
+        assert_eq!(
+            product_latest_rows[0].get::<String, _>("id"),
+            second_daily.tile_set_id
+        );
+        assert_eq!(
+            product_latest_rows[0].get::<String, _>("product"),
+            "VNP46A2"
+        );
+        assert!(product_latest_rows[0].get::<bool, _>("product_latest"));
+        assert!(!product_latest_rows[0].get::<bool, _>("latest"));
+        assert_eq!(
+            product_latest_rows[1].get::<String, _>("id"),
+            monthly.tile_set_id
+        );
+        assert_eq!(
+            product_latest_rows[1].get::<String, _>("product"),
+            "VNP46A3"
+        );
+        assert!(product_latest_rows[1].get::<bool, _>("product_latest"));
+        assert!(!product_latest_rows[1].get::<bool, _>("latest"));
+    }
+
+    #[sqlx::test(migrations = "../db-migrate/migrations")]
+    async fn product_latest_promotion_rejects_granule_tile_sets(pool: PgPool) {
+        let granule = tile_manifest("2026-05-21-radiance-dark-sky-v1-granule1");
+        insert_tile_set_with_metadata(
+            &pool,
+            TileSetInsert {
+                manifest: &granule,
+                product: Some("VNP46A2"),
+                cadence: Some(ProductCadence::Daily),
+                kind: TileSetKind::Granule,
+            },
+        )
+        .await
+        .expect("insert granule tile set");
+
+        let error = promote_product_latest_tile_set(&pool, &granule.tile_set_id)
+            .await
+            .expect_err("granules must not become product latest");
+
+        assert!(matches!(
+            error,
+            DbError::TileSetNotMosaic {
+                tile_set_id,
+                tile_set_kind,
+            } if tile_set_id == granule.tile_set_id && tile_set_kind == "granule"
+        ));
+
+        let product_latest = sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT product_latest
+            FROM tile_sets
+            WHERE id = $1
+            "#,
+        )
+        .bind(&granule.tile_set_id)
+        .fetch_one(&pool)
+        .await
+        .expect("load granule latest flag");
+
+        assert!(!product_latest);
     }
 }

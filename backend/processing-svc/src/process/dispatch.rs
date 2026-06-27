@@ -1,6 +1,6 @@
 use uuid::Uuid;
 
-use crate::{commands::Command, config::AppConfig, retention, ui, ServiceError};
+use crate::{commands::Command, config::AppConfig, mosaic, retention, ui, ServiceError};
 
 use super::{
     message::process_message_payload,
@@ -41,6 +41,22 @@ pub(crate) async fn dispatch(
         }
         Command::RetentionCleanup { execute } => {
             retention::run_retention_cleanup(config, *execute, correlation_id).await?;
+        }
+        Command::PublishMosaic {
+            product,
+            dataset_date,
+            promote_public_latest,
+            allow_incomplete_public_latest,
+        } => {
+            mosaic::publish_mosaic(
+                config,
+                product,
+                *dataset_date,
+                *promote_public_latest,
+                *allow_incomplete_public_latest,
+                correlation_id,
+            )
+            .await?;
         }
     }
 

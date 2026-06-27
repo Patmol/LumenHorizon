@@ -191,6 +191,7 @@ where
             bounds: coverage_bounds,
             tile_count: tiles.len() as u32,
             source_granules,
+            coverage: None,
         },
     )?;
 
@@ -625,6 +626,43 @@ mod tests {
                 .tile_url_template
                 .contains(case.tile_set_id));
         }
+    }
+
+    #[tokio::test]
+    async fn excludes_tiles_that_only_touch_source_boundary() {
+        let config = test_config_for("-100,20,-90,30", 3, 3);
+        let source_bounds = GeographicBounds::from(config.tile_bounds);
+        let raster_shape = RasterShape {
+            width: 1000,
+            height: 1000,
+        };
+
+        let tile_set = generate_tile_set_with_renderer(
+            &config,
+            TileSetBuildRequest {
+                tile_set_id: "2026-05-21-radiance-dark-sky-v1-boundary".to_owned(),
+                dataset_date: chrono::NaiveDate::from_ymd_opt(2026, 5, 21).unwrap(),
+                generated_at: chrono::Utc.with_ymd_and_hms(2026, 5, 21, 9, 15, 0).unwrap(),
+                processor_version: "processing-svc:test-sha".to_owned(),
+                generation_bounds: source_bounds,
+                source_bounds,
+                raster_shape,
+                source_granules: Vec::new(),
+            },
+            |coord, _window| async move {
+                Ok(RenderedTile {
+                    coord,
+                    png_bytes: b"fake-png".to_vec(),
+                    renderable_pixel_count: 1,
+                })
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(tile_set.plan.tile_count, 1);
+        assert_eq!(tile_set.tiles.len(), 1);
+        assert_eq!(tile_set.tiles[0].coord, TileCoord { z: 3, x: 1, y: 3 });
     }
 
     #[tokio::test]
